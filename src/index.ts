@@ -14,8 +14,8 @@ const app = express();
 
 app.use(helmet());
 app.use(cors());
-app.use(express.json());
-app.use(pinoHttp({ logger }));
+app.use(express.json()); // Parse JSON bodies
+app.use(pinoHttp({ logger })); // Log each request
 
 // Verify webhook signatures on routes handling external callbacks.
 // Apply webhookLimiter where webhooks are received to prevent abuse.
