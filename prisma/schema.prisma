@@ -1,0 +1,53 @@
+// Prisma schema using SQLite in development.
+// Critical notes:
+// - OAuth tokens in GoogleAuth must be stored securely.
+// - ProcessedWebhook helps with idempotency by tracking handled events.
+// - Verify webhook signatures before trusting callbacks.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Tenant {
+  id                 Int               @id @default(autoincrement())
+  slug               String            @unique
+  createdAt          DateTime          @default(now())
+  googleAuth         GoogleAuth?
+  bookings           Booking[]
+  processedWebhooks  ProcessedWebhook[]
+}
+
+model GoogleAuth {
+  id          Int      @id @default(autoincrement())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId    Int      @unique
+  accessToken String
+  refreshToken String
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  // OAuth tokens should be rotated and never logged.
+}
+
+model Booking {
+  id        Int      @id @default(autoincrement())
+  tenant    Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId  Int
+  externalId String @unique
+  createdAt DateTime @default(now())
+  // Check ProcessedWebhook to enforce idempotency.
+}
+
+model ProcessedWebhook {
+  id          Int      @id @default(autoincrement())
+  tenant      Tenant   @relation(fields: [tenantId], references: [id])
+  tenantId    Int
+  eventId     String   @unique
+  processedAt DateTime @default(now())
+  // Verify webhook signatures before marking events as processed.
+}

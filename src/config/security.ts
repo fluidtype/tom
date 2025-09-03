@@ -1,5 +1,5 @@
-import cors, { CorsOptions } from 'cors';
-import helmet, { HelmetOptions } from 'helmet';
+import type { CorsOptions } from 'cors';
+import type { HelmetOptions } from 'helmet';
 
 export const corsOptions: CorsOptions = {
   origin: process.env.CORS_ORIGIN || '*',
