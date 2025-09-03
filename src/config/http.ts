@@ -1,15 +1,18 @@
-import corsFactory from 'cors';
-import helmetFactory from 'helmet';
+import { CorsOptions } from 'cors';
+import { HelmetOptions } from 'helmet';
 import rateLimit from 'express-rate-limit';
 
 import { env } from './env';
 
-export const cors = () =>
-  corsFactory({
-    origin: env.CORS_ORIGIN,
-  });
-
-export const helmet = () => helmetFactory();
+export function createHttpConfig(): {
+  corsOptions: CorsOptions;
+  helmetOptions: HelmetOptions;
+} {
+  return {
+    corsOptions: { origin: env.CORS_ORIGIN },
+    helmetOptions: {},
+  };
+}
 
 export const publicLimiter = rateLimit({
   windowMs: 60_000,

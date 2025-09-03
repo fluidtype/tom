@@ -1,53 +1,68 @@
-// Prisma schema using SQLite in development.
-// Critical notes:
-// - OAuth tokens in GoogleAuth must be stored securely.
-// - ProcessedWebhook helps with idempotency by tracking handled events.
-// - Verify webhook signatures before trusting callbacks.
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"
+  provider = "sqlite"          // dev: SQLite; in prod userai Postgres
   url      = env("DATABASE_URL")
 }
 
 model Tenant {
-  id                 Int               @id @default(autoincrement())
-  slug               String            @unique
-  createdAt          DateTime          @default(now())
-  googleAuth         GoogleAuth?
-  bookings           Booking[]
-  processedWebhooks  ProcessedWebhook[]
+  id              String   @id @default(cuid())
+  name            String
+  slug            String   @unique
+  whatsappPhoneId String?
+  whatsappToken   String?
+  gcalPrimaryId   String?
+  gauth           GoogleAuth?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  bookings        Booking[]
 }
 
 model GoogleAuth {
-  id          Int      @id @default(autoincrement())
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  tenantId    Int      @unique
-  accessToken String
+  id           String   @id @default(cuid())
+  tenantId     String   @unique
+  accessToken  String
   refreshToken String
-  expiresAt   DateTime
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  // OAuth tokens should be rotated and never logged.
+  scope        String
+  tokenType    String
+  expiryDate   BigInt   // epoch ms
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  tenant       Tenant   @relation(fields: [tenantId], references: [id])
 }
 
 model Booking {
-  id        Int      @id @default(autoincrement())
-  tenant    Tenant   @relation(fields: [tenantId], references: [id])
-  tenantId  Int
-  externalId String @unique
-  createdAt DateTime @default(now())
-  // Check ProcessedWebhook to enforce idempotency.
+  id            String   @id @default(cuid())
+  tenantId      String
+  customerName  String
+  customerPhone String
+  people        Int
+  startAt       DateTime
+  endAt         DateTime
+  notes         String?
+  source        String   // "whatsapp"
+  waMessageId   String?
+  gcalEventId   String?
+  status        String   // "pending" | "confirmed" | "cancelled"
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  tenant        Tenant   @relation(fields: [tenantId], references: [id])
+
+  @@index([tenantId, startAt])
 }
 
 model ProcessedWebhook {
-  id          Int      @id @default(autoincrement())
-  tenant      Tenant   @relation(fields: [tenantId], references: [id])
-  tenantId    Int
-  eventId     String   @unique
-  processedAt DateTime @default(now())
-  // Verify webhook signatures before marking events as processed.
+  id         String   @id @default(cuid())
+  tenantId   String
+  provider   String   // "whatsapp"
+  messageId  String
+  receivedAt DateTime @default(now())
+
+  @@unique([tenantId, provider, messageId])
 }

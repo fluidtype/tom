@@ -1,33 +1,51 @@
-import dotenv from 'dotenv';
+import 'dotenv/config';
 import express from 'express';
+import helmet from 'helmet';
+import cors from 'cors';
+import pino from 'pino';
 import pinoHttp from 'pino-http';
 
-import { env } from './config/env';
-import logger from './config/logger';
-import { cors, helmet, publicLimiter } from './config/http';
+import { createHttpConfig } from './config/http';
 import healthRouter from './routes/health';
 import { errorHandler } from './middlewares/errorHandler';
 
-dotenv.config();
+const logger = pino({
+  level: process.env.LOG_LEVEL || 'info',
+  transport:
+    process.env.NODE_ENV !== 'production'
+      ? { target: 'pino-pretty', options: { colorize: true } }
+      : undefined,
+});
 
 const app = express();
 
-app.use(helmet());
-app.use(cors());
-app.use(express.json()); // Parse JSON bodies
-app.use(pinoHttp({ logger })); // Log each request
+// HTTP hardening + CORS + logging
+const { corsOptions, helmetOptions } = createHttpConfig();
+app.use(helmet(helmetOptions));
+app.use(cors(corsOptions));
+app.use(
+  pinoHttp({
+    logger,
+    customLogLevel: (_req, res, err) => {
+      if (err || res.statusCode >= 500) return 'error';
+      if (res.statusCode >= 400) return 'warn';
+      return 'info';
+    },
+  }),
+);
 
-// Verify webhook signatures on routes handling external callbacks.
-// Apply webhookLimiter where webhooks are received to prevent abuse.
-// Use idempotency keys on state-changing routes to prevent duplicate work.
-// Protect user data with OAuth where appropriate.
+// Body parser
+app.use(express.json());
 
-app.use(publicLimiter); // Adjust rate limits to balance security and usability.
-
+// Healthcheck
 app.use('/healthz', healthRouter);
 
+// Error handler (ultimo)
 app.use(errorHandler);
 
-app.listen(env.PORT, () => {
-  logger.info(`Server listening on port ${env.PORT}`);
+// Avvio
+const PORT = Number(process.env.PORT || 3000);
+app.set('trust proxy', true);
+app.listen(PORT, () => {
+  logger.info({ port: PORT, env: process.env.NODE_ENV }, 'Server started');
 });

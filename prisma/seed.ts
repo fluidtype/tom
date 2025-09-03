@@ -1,19 +1,26 @@
-import { prisma } from '../src/db/client';
+import 'dotenv/config';
+import { PrismaClient } from '@prisma/client';
+
+const prisma = new PrismaClient();
 
 async function main() {
-  const slug = 'demo';
-  await prisma.tenant.upsert({ // idempotent seed ensures reruns are safe
-    where: { slug },
+  // crea un tenant demo se non esiste
+  await prisma.tenant.upsert({
+    where: { slug: 'demo' },
     update: {},
-    create: { slug },
+    create: {
+      name: 'Demo Restaurant',
+      slug: 'demo',
+      gcalPrimaryId: 'primary',
+    },
   });
-  console.log(`Seeded tenant: ${slug}`);
+  console.log('Seed ok: tenant demo creato/aggiornato');
 }
 
 main()
   .catch((e) => {
-    console.error('Error seeding database', e);
-    process.exitCode = 1;
+    console.error(e);
+    process.exit(1);
   })
   .finally(async () => {
     await prisma.$disconnect();
