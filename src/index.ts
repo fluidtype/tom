@@ -1,12 +1,14 @@
-import 'dotenv/config';
+import dotenv from 'dotenv';
 import express from 'express';
 import pinoHttp from 'pino-http';
 
-import env from './config/env';
+import { env } from './config/env';
 import logger from './config/logger';
 import { cors, helmet, publicLimiter } from './config/http';
 import healthRouter from './routes/health';
-import errorHandler from './middlewares/errorHandler';
+import { errorHandler } from './middlewares/errorHandler';
+
+dotenv.config();
 
 const app = express();
 
@@ -26,6 +28,6 @@ app.use('/healthz', healthRouter);
 
 app.use(errorHandler);
 
-app.listen(env.port, () => {
-  logger.info(`Server listening on port ${env.port}`);
+app.listen(env.PORT, () => {
+  logger.info(`Server listening on port ${env.PORT}`);
 });
