@@ -25,11 +25,13 @@ export const publicLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-});
+  trustProxy: true, // ✅
+} as any);
 
 export const webhookLimiter = rateLimit({
   windowMs: 60_000,
   max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-});
+  trustProxy: true, // ✅
+} as any);

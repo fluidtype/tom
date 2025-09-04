@@ -15,7 +15,10 @@ import whoami from './routes/whoami';
 
 const app = express();
 
-app.set('trust proxy', true);
+// Con proxy (ngrok) fidati del primo hop
+app.set('trust proxy', 1);
+// in alternativa locale puro: 'loopback'
+// app.set('trust proxy', 'loopback');
 app.disable('x-powered-by');
 
 // HTTP hardening
