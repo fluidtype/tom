@@ -1,68 +1,88 @@
+// prisma/schema.prisma
 
 generator client {
   provider = "prisma-client-js"
 }
 
 datasource db {
-  provider = "sqlite"          // dev: SQLite; in prod userai Postgres
+  provider = "sqlite"   // dev: SQLite; in prod passa a "postgresql" + DATABASE_URL
   url      = env("DATABASE_URL")
+}
+
+enum BookingStatus {
+  pending
+  confirmed
+  cancelled
 }
 
 model Tenant {
   id              String   @id @default(cuid())
   name            String
   slug            String   @unique
+
   whatsappPhoneId String?
   whatsappToken   String?
   gcalPrimaryId   String?
-  gauth           GoogleAuth?
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
 
   bookings        Booking[]
+  googleAuth      GoogleAuth?
+  webhooks        ProcessedWebhook[]
+
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
 }
 
 model GoogleAuth {
   id           String   @id @default(cuid())
+
   tenantId     String   @unique
+  tenant       Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   accessToken  String
   refreshToken String
-  scope        String
-  tokenType    String
-  expiryDate   BigInt   // epoch ms
+  scope        String?
+  tokenType    String?
+  expiryDate   DateTime
+
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
-
-  tenant       Tenant   @relation(fields: [tenantId], references: [id])
 }
 
 model Booking {
-  id            String   @id @default(cuid())
+  id            String        @id @default(cuid())
+
   tenantId      String
+  tenant        Tenant        @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
   customerName  String
   customerPhone String
   people        Int
   startAt       DateTime
   endAt         DateTime
   notes         String?
-  source        String   // "whatsapp"
+
+  source        String
   waMessageId   String?
   gcalEventId   String?
-  status        String   // "pending" | "confirmed" | "cancelled"
+
+  status        BookingStatus @default(pending)
+
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  tenant        Tenant   @relation(fields: [tenantId], references: [id])
-
-  @@index([tenantId, startAt])
+  @@index([tenantId, status, startAt])
 }
 
 model ProcessedWebhook {
   id         String   @id @default(cuid())
+
   tenantId   String
-  provider   String   // "whatsapp"
+  tenant     Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  provider   String
   messageId  String
   receivedAt DateTime @default(now())
 
   @@unique([tenantId, provider, messageId])
+  @@index([tenantId, receivedAt])
 }

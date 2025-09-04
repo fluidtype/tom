@@ -1,5 +1,6 @@
 {
   "watch": ["src"],
-  "ext": "ts,json",
-  "exec": "ts-node --files src/index.ts"
+  "ext": "ts",
+  "exec": "ts-node src/index.ts",
+  "ignore": ["dist", "node_modules", ".prisma"]
 }

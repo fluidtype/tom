@@ -15,11 +15,13 @@ import whoami from './routes/whoami';
 const app = express();
 
 app.set('trust proxy', true);
+app.disable('x-powered-by');
 
 // HTTP hardening
 const { corsOptions, helmetOptions } = createHttpConfig();
 app.use(helmet(helmetOptions));
 app.use(cors(corsOptions));
+app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
 
 // Correlation ID
