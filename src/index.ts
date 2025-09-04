@@ -8,6 +8,8 @@ import pinoHttp from 'pino-http';
 import { createHttpConfig } from './config/http';
 import healthRouter from './routes/health';
 import { errorHandler } from './middlewares/errorHandler';
+import { tenantResolver } from './middlewares/tenantResolver';
+import whoami from './routes/whoami';
 
 const logger = pino({
   level: process.env.LOG_LEVEL || 'info',
@@ -39,6 +41,10 @@ app.use(express.json());
 
 // Healthcheck
 app.use('/healthz', healthRouter);
+
+// da qui in poi rotte “business” che richiedono il tenant
+app.use(tenantResolver);
+app.use('/whoami', whoami);
 
 // Error handler (ultimo)
 app.use(errorHandler);
