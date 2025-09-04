@@ -6,8 +6,9 @@ import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
 import logger from './config/logger';
 
-import { createHttpConfig, publicLimiter /* , webhookLimiter */ } from './config/http';
+import { createHttpConfig, publicLimiter, webhookLimiter } from './config/http';
 import healthRouter from './routes/health';
+import whatsappWebhook from './routes/webhook.whatsapp';
 import { errorHandler } from './middlewares/errorHandler';
 import { tenantResolver } from './middlewares/tenantResolver';
 import whoami from './routes/whoami';
@@ -57,11 +58,12 @@ app.use(
 // Healthcheck con rate limit pubblico
 app.use('/healthz', publicLimiter, healthRouter);
 
+// Webhook WhatsApp (no tenant resolver)
+app.use('/webhook/whatsapp', webhookLimiter, whatsappWebhook);
+
 // da qui in poi rotte “business” che richiedono il tenant
 app.use(tenantResolver);
 app.use('/whoami', whoami);
-
-// TODO: app.use('/webhook/whatsapp', webhookLimiter, webhookRouter);
 
 // Error handler (ultimo)
 app.use(errorHandler);
