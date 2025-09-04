@@ -61,6 +61,8 @@ app.use('/healthz', publicLimiter, healthRouter);
 app.use(tenantResolver);
 app.use('/whoami', whoami);
 
+// TODO: app.use('/webhook/whatsapp', webhookLimiter, webhookRouter);
+
 // Error handler (ultimo)
 app.use(errorHandler);
 

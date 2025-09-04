@@ -9,7 +9,13 @@ export function createHttpConfig(): {
   helmetOptions: HelmetOptions;
 } {
   return {
-    corsOptions: { origin: env.CORS_ORIGIN },
+    corsOptions: {
+      origin: env.CORS_ORIGIN,
+      methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+      allowedHeaders: ['Content-Type', 'Authorization', 'X-Tenant', 'X-Request-Id'],
+      credentials: false,
+    },
+    // Base Helmet configuration; extend with stricter policies as needed
     helmetOptions: {},
   };
 }
