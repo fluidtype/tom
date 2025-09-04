@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
+import logger from '../src/config/logger';
 
 const prisma = new PrismaClient();
 
@@ -14,12 +15,12 @@ async function main() {
       gcalPrimaryId: 'primary',
     },
   });
-  console.log('Seed ok: tenant demo creato/aggiornato');
+  logger.info('Seed ok: tenant demo creato/aggiornato');
 }
 
 main()
   .catch((e) => {
-    console.error(e);
+    logger.error(e);
     process.exit(1);
   })
   .finally(async () => {

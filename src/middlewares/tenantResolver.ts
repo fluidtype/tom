@@ -16,11 +16,7 @@ export async function tenantResolver(req: Request, res: Response, next: NextFunc
     req.tenant = tenant;
 
     // opzionale: arricchisci il logger per-request se presente
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
-    if (req.log?.child) {
-      // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-      // @ts-ignore
+    if (req.log && tenant.slug) {
       req.log = req.log.child({ tenant: tenant.slug });
     }
 

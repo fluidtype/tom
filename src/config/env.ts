@@ -1,7 +1,5 @@
 import process from 'node:process';
-import pino from 'pino';
-
-const logger = pino();
+import logger from './logger';
 
 const required = ['NODE_ENV', 'PORT', 'DATABASE_URL'] as const;
 const missing = required.filter((key) => !process.env[key]);

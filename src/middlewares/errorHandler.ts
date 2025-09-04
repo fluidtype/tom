@@ -1,24 +1,20 @@
-import { Request, Response, NextFunction } from 'express';
-import pino from 'pino';
+import type { Request, Response, NextFunction } from 'express';
+import logger from '../config/logger';
 
-const logger = pino();
+type AppError = Error & { statusCode?: number; status?: number; code?: string };
 
-interface AppError {
-  statusCode?: number;
-  status?: number;
-  message?: string;
-  code?: string;
-}
-
-export function errorHandler(err: unknown, _req: Request, res: Response, _next: NextFunction) {
+export function errorHandler(err: unknown, req: Request, res: Response, _next: NextFunction) {
   const error = err as AppError;
   const status = error.statusCode || error.status || 500;
-  logger.error({ err, status }, 'Unhandled error');
+
+  logger.error({ err: error, status, reqId: req.id }, 'Unhandled error');
+
+  const isServer = status >= 500;
   res.status(status).json({
     ok: false,
     error: {
-      message: error.message || 'Internal Server Error',
-      code: error.code || 'INTERNAL_ERROR',
+      message: isServer ? 'Internal Server Error' : error.message || 'Request error',
+      code: error.code || (isServer ? 'INTERNAL_ERROR' : 'REQUEST_ERROR'),
     },
   });
 }

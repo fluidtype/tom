@@ -2,29 +2,34 @@ import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import cors from 'cors';
-import pino from 'pino';
+import crypto from 'node:crypto';
 import pinoHttp from 'pino-http';
+import logger from './config/logger';
 
-import { createHttpConfig } from './config/http';
+import { createHttpConfig, publicLimiter /* , webhookLimiter */ } from './config/http';
 import healthRouter from './routes/health';
 import { errorHandler } from './middlewares/errorHandler';
 import { tenantResolver } from './middlewares/tenantResolver';
 import whoami from './routes/whoami';
 
-const logger = pino({
-  level: process.env.LOG_LEVEL || 'info',
-  transport:
-    process.env.NODE_ENV !== 'production'
-      ? { target: 'pino-pretty', options: { colorize: true } }
-      : undefined,
-});
-
 const app = express();
 
-// HTTP hardening + CORS + logging
+app.set('trust proxy', true);
+
+// HTTP hardening
 const { corsOptions, helmetOptions } = createHttpConfig();
 app.use(helmet(helmetOptions));
 app.use(cors(corsOptions));
+app.use(express.json());
+
+// Correlation ID
+app.use((req, _res, next) => {
+  const id = req.header('x-request-id') || crypto.randomUUID();
+  req.id = id;
+  next();
+});
+
+// pino-http centralizzato
 app.use(
   pinoHttp({
     logger,
@@ -33,14 +38,22 @@ app.use(
       if (res.statusCode >= 400) return 'warn';
       return 'info';
     },
+    redact: {
+      paths: [
+        'req.headers.authorization',
+        'req.body.password',
+        'req.body.token',
+      ],
+      remove: true,
+    },
+    autoLogging: {
+      ignore: (req) => req.url === '/healthz',
+    },
   }),
 );
 
-// Body parser
-app.use(express.json());
-
-// Healthcheck
-app.use('/healthz', healthRouter);
+// Healthcheck con rate limit pubblico
+app.use('/healthz', publicLimiter, healthRouter);
 
 // da qui in poi rotte “business” che richiedono il tenant
 app.use(tenantResolver);
@@ -51,7 +64,6 @@ app.use(errorHandler);
 
 // Avvio
 const PORT = Number(process.env.PORT || 3000);
-app.set('trust proxy', true);
 app.listen(PORT, () => {
   logger.info({ port: PORT, env: process.env.NODE_ENV }, 'Server started');
 });
