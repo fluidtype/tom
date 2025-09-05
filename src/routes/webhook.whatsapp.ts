@@ -10,6 +10,7 @@ interface VerifyQuery {
   'hub.challenge'?: string;
 }
 
+// GET verify (Meta challenge)
 router.get('/', (req: Request<unknown, unknown, unknown, VerifyQuery>, res: Response) => {
   const mode = String(req.query['hub.mode'] ?? '');
   const token = String(req.query['hub.verify_token'] ?? '');
@@ -24,6 +25,7 @@ router.get('/', (req: Request<unknown, unknown, unknown, VerifyQuery>, res: Resp
   }
 });
 
+// --- Schemi Zod per payload WA ---
 const WaTextMessageSchema = z.object({
   id: z.string(),
   from: z.string(),
@@ -61,6 +63,7 @@ const WaWebhookSchema = z.object({
   entry: z.array(WaEntrySchema),
 });
 
+// POST webhook (ACK + idempotenza)
 router.post('/', async (req: Request, res: Response) => {
   // 1) ACK immediato
   res.status(200).json({ ok: true });
@@ -98,6 +101,7 @@ router.post('/', async (req: Request, res: Response) => {
           if (!Array.isArray(val?.messages)) continue;
           for (const m of val.messages) {
             if (m.type !== 'text') continue;
+
             const messageId = m.id;
             const from = m.from;
             const body = m.text.body ?? '';
@@ -122,7 +126,10 @@ router.post('/', async (req: Request, res: Response) => {
             }
 
             // Echo
-            req.log?.info({ tenant: tenant.slug, messageId, from, body }, 'WA inbound text processed');
+            req.log?.info(
+              { tenant: tenant.slug, messageId, from, body },
+              'WA inbound text processed',
+            );
           }
         }
       }
