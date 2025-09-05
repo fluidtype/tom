@@ -26,7 +26,8 @@
     "express-rate-limit": "^8.0.1",
     "helmet": "^8.1.0",
     "pino": "^9.9.1",
-    "pino-http": "^10.5.0"
+    "pino-http": "^10.5.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/cors": "^2.8.19",
@@ -45,3 +46,4 @@
     "typescript": "^5.9.2"
   }
 }
+

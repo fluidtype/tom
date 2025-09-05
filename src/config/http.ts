@@ -1,6 +1,8 @@
+// src/config/http.ts
 import { CorsOptions } from 'cors';
 import { HelmetOptions } from 'helmet';
 import rateLimit from 'express-rate-limit';
+/* eslint-disable @typescript-eslint/no-explicit-any */
 
 import { env } from './env';
 
@@ -25,7 +27,7 @@ export const publicLimiter = rateLimit({
   max: 60,
   standardHeaders: true,
   legacyHeaders: false,
-  trustProxy: true, // ✅
+  trustProxy: true, // ✅ ngrok / proxy
 } as any);
 
 export const webhookLimiter = rateLimit({
@@ -33,5 +35,7 @@ export const webhookLimiter = rateLimit({
   max: 1000,
   standardHeaders: true,
   legacyHeaders: false,
-  trustProxy: true, // ✅
+  trustProxy: true, // ✅ ngrok / proxy
 } as any);
+
+/* eslint-enable @typescript-eslint/no-explicit-any */
