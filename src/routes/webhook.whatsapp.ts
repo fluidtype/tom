@@ -61,6 +61,24 @@ const WaWebhookSchema = z.object({
   entry: z.array(WaEntrySchema),
 });
 
+// resolve tenant via metadata phone_number_id, header, or fallback demo
+async function resolveTenant(slugHeader: string | undefined, phoneNumberId: string | undefined) {
+  if (phoneNumberId) {
+    const byPhone = await prisma.tenant.findFirst({ where: { whatsappPhoneId: phoneNumberId } });
+    if (byPhone) return { tenant: byPhone, resolveVia: 'metadata' as const };
+  }
+
+  if (slugHeader) {
+    const bySlug = await prisma.tenant.findUnique({ where: { slug: slugHeader.trim() } });
+    if (bySlug) return { tenant: bySlug, resolveVia: 'header' as const };
+  }
+
+  const demo = await prisma.tenant.findUnique({ where: { slug: 'demo' } });
+  if (demo) return { tenant: demo, resolveVia: 'fallback-demo' as const };
+
+  return { tenant: null, resolveVia: 'none' as const };
+}
+
 router.post('/', async (req: Request, res: Response) => {
   // 1) ACK immediato
   res.status(200).json({ ok: true });
@@ -80,29 +98,30 @@ router.post('/', async (req: Request, res: Response) => {
       return;
     }
 
-    // 4) Resolve tenant
-    const slug = (req.header('X-Tenant') || 'demo').trim();
-    let tenant = await prisma.tenant.findUnique({ where: { slug } });
-    if (!tenant) tenant = await prisma.tenant.findUnique({ where: { slug: 'demo' } });
-    if (!tenant) {
-      req.log?.error({ slug }, 'no tenant resolved for webhook');
-      return;
-    }
-
-    // 5) Cicla gli entry/messages
+    // 4) Cicla gli entry/messages
     try {
       const { entry } = parse.data;
       for (const e of entry) {
         for (const ch of e.changes) {
           const val = ch.value;
+
+          const phoneNumberId = val?.metadata?.phone_number_id;
+          const slugHeader = req.header('X-Tenant') || undefined;
+          const { tenant, resolveVia } = await resolveTenant(slugHeader, phoneNumberId);
+          if (!tenant) {
+            req.log?.error({ phoneNumberId, slugHeader }, 'no tenant resolved for webhook');
+            continue;
+          }
+
           if (!Array.isArray(val?.messages)) continue;
+
           for (const m of val.messages) {
             if (m.type !== 'text') continue;
+
             const messageId = m.id;
             const from = m.from;
             const body = m.text.body ?? '';
 
-            // Idempotenza
             try {
               await prisma.processedWebhook.create({
                 data: {
@@ -121,8 +140,10 @@ router.post('/', async (req: Request, res: Response) => {
               continue;
             }
 
-            // Echo
-            req.log?.info({ tenant: tenant.slug, messageId, from, body }, 'WA inbound text processed');
+            req.log?.info(
+              { tenant: tenant.slug, resolveVia, phoneNumberId, messageId, from, body },
+              'WA inbound text processed'
+            );
           }
         }
       }

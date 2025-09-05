@@ -15,7 +15,7 @@ model Tenant {
   name            String
   slug            String   @unique
 
-  whatsappPhoneId String?
+  whatsappPhoneId String?  @unique
   whatsappToken   String?
   gcalPrimaryId   String?
 

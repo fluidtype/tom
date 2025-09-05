@@ -1,28 +1,26 @@
-import 'dotenv/config';
 import { PrismaClient } from '@prisma/client';
-import logger from '../src/config/logger';
 
 const prisma = new PrismaClient();
 
 async function main() {
-  // crea un tenant demo se non esiste
+  const phoneId = process.env.WHATSAPP_PHONE_NUMBER_ID || null;
+
   await prisma.tenant.upsert({
     where: { slug: 'demo' },
-    update: {},
-    create: {
+    update: {
       name: 'Demo Restaurant',
+      ...(phoneId ? { whatsappPhoneId: phoneId } : {}),
+    },
+    create: {
       slug: 'demo',
-      gcalPrimaryId: 'primary',
+      name: 'Demo Restaurant',
+      ...(phoneId ? { whatsappPhoneId: phoneId } : {}),
     },
   });
-  logger.info('Seed ok: tenant demo creato/aggiornato');
+
+  console.log(
+    JSON.stringify({ level: 30, msg: 'Seed ok: tenant demo creato/aggiornato' })
+  );
 }
 
-main()
-  .catch((e) => {
-    logger.error(e);
-    process.exit(1);
-  })
-  .finally(async () => {
-    await prisma.$disconnect();
-  });
+main().finally(() => prisma.$disconnect());
