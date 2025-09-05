@@ -25,6 +25,7 @@
     "express": "^5.1.0",
     "express-rate-limit": "^8.0.1",
     "helmet": "^8.1.0",
+    "openai": "^4.56.0",
     "pino": "^9.9.1",
     "pino-http": "^10.5.0",
     "zod": "^3.23.8"

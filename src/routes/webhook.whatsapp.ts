@@ -141,6 +141,8 @@ router.post('/', async (req: Request, res: Response) => {
               continue;
             }
 
+            // TODO: parseBookingIntent(body) to drive next steps
+
             const phoneNumberIdEnv = process.env.WHATSAPP_PHONE_NUMBER_ID;
             const tokenEnv = process.env.WHATSAPP_TOKEN;
             const phoneNumberIdOut = tenant.whatsappPhoneId || phoneNumberIdEnv;

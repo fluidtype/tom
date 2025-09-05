@@ -12,6 +12,7 @@ import whatsappWebhook from './routes/webhook.whatsapp';
 import { errorHandler } from './middlewares/errorHandler';
 import { tenantResolver } from './middlewares/tenantResolver';
 import whoami from './routes/whoami';
+import nluRouter from './routes/nlu';
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use('/webhook/whatsapp', webhookLimiter, whatsappWebhook);
 
 // da qui in poi rotte “business” che richiedono il tenant
 app.use(tenantResolver);
+app.use('/nlu', nluRouter);
 app.use('/whoami', whoami);
 
 // 404 handler
