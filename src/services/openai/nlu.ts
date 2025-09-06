@@ -87,27 +87,25 @@ const extractBookingSchema = z.object({
   notes: z.string().optional(),
 });
 
-// ✅ Tool definition corretta per Responses API + schema chiuso
+// ✅ Tool definition compatibile con openai@4.56.0 (schema chiuso)
 const EXTRACT_BOOKING_TOOL = {
   type: 'function',
-  function: {
-    name: 'extract_booking',
-    description:
-      'Estrai i dettagli della prenotazione da un messaggio naturale in italiano.',
-    parameters: {
-      type: 'object',
-      additionalProperties: false,
-      properties: {
-        intent: { type: 'string', enum: ['booking.create'] },
-        date: { type: 'string', description: 'Data ISO (YYYY-MM-DD)' },
-        time: { type: 'string', description: 'Ora HH:mm nel fuso del ristorante' },
-        people: { type: 'number', minimum: 1 },
-        name: { type: 'string' },
-        phone: { type: 'string' },
-        notes: { type: 'string' },
-      },
-      required: ['intent'],
+  name: 'extract_booking',
+  description:
+    'Estrai i dettagli della prenotazione da un messaggio naturale in italiano.',
+  parameters: {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+      intent: { type: 'string', enum: ['booking.create'] },
+      date: { type: 'string', description: 'Data ISO (YYYY-MM-DD)' },
+      time: { type: 'string', description: 'Ora HH:mm nel fuso del ristorante' },
+      people: { type: 'number', minimum: 1 },
+      name: { type: 'string' },
+      phone: { type: 'string' },
+      notes: { type: 'string' },
     },
+    required: ['intent'],
   },
 } as const;
 
@@ -135,7 +133,7 @@ export async function parseBookingIntent(
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         tools: [EXTRACT_BOOKING_TOOL as any],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        tool_choice: { type: 'function', function: { name: 'extract_booking' } } as any,
+        tool_choice: { type: 'function', function_name: 'extract_booking' } as any,
         temperature: 0.2,
       });
 
