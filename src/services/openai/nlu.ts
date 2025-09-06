@@ -1,9 +1,84 @@
 import OpenAI from 'openai';
 import { z } from 'zod';
 import logger from '../../config/logger';
+import { demoProfile } from '../../config/tenantProfile.demo';
 
-// structured output type
-const FieldsSchema = z.object({
+export type NluResult = {
+  intent: 'booking.create' | 'smalltalk.info' | 'unknown';
+  confidence: number;
+  fields: {
+    date?: string;
+    time?: string;
+    people?: number;
+    name?: string;
+    phone?: string;
+    notes?: string;
+  };
+  missing_fields: string[];
+  reply?: string;
+  next_action: 'check_availability' | 'ask_missing' | 'answer_smalltalk' | 'none';
+};
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
+
+function detectSmalltalk(text: string): NluResult | null {
+  const t = text.toLowerCase();
+  if (/(dove|indirizzo|vi trovate)/.test(t)) {
+    return {
+      intent: 'smalltalk.info',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: [],
+      reply: `${demoProfile.address}. Vuoi prenotare? Dimmi quante persone.`,
+      next_action: 'answer_smalltalk',
+    };
+  }
+  if (/(orari|aperti|quando|chiusi)/.test(t)) {
+    return {
+      intent: 'smalltalk.info',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: [],
+      reply: `${demoProfile.opening}. Vuoi prenotare? Dimmi quante persone.`,
+      next_action: 'answer_smalltalk',
+    };
+  }
+  if (/(men[uù]|piatti|cucina)/.test(t)) {
+    return {
+      intent: 'smalltalk.info',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: [],
+      reply: `Puoi vedere il menu qui: ${demoProfile.menuUrl}. Vuoi prenotare? Dimmi quante persone.`,
+      next_action: 'answer_smalltalk',
+    };
+  }
+  if (/parchegg/.test(t)) {
+    return {
+      intent: 'smalltalk.info',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: [],
+      reply: `${demoProfile.parking}. Vuoi prenotare? Dimmi quante persone.`,
+      next_action: 'answer_smalltalk',
+    };
+  }
+  if (/(ciao|buongiorno|buonasera)/.test(t)) {
+    return {
+      intent: 'smalltalk.info',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: [],
+      reply: 'Ciao! Vuoi prenotare un tavolo? Dimmi quante persone.',
+      next_action: 'answer_smalltalk',
+    };
+  }
+  return null;
+}
+
+const extractBookingSchema = z.object({
+  intent: z.literal('booking.create'),
   date: z.string().optional(),
   time: z.string().optional(),
   people: z.number().optional(),
@@ -12,55 +87,29 @@ const FieldsSchema = z.object({
   notes: z.string().optional(),
 });
 
-const NluParsedSchema = z.object({
-  intent: z.string(),
-  confidence: z.number().min(0).max(1),
-  fields: FieldsSchema,
-  missing_fields: z.array(z.string()).optional(),
-  reply: z.string().optional(),
-  next_action: z.enum([
-    'ask_clarification',
-    'check_availability',
-    'answer_info',
-    'smalltalk',
-    'handoff',
-  ]),
-});
+export async function parseBookingIntent(
+  text: string,
+  _context?: { phone?: string; locale?: string; timezone?: string },
+): Promise<NluResult> {
+  const small = detectSmalltalk(text);
+  if (small) return small;
 
-export type NluParsed = z.infer<typeof NluParsedSchema>;
+  const systemPrompt =
+    'Sei un NLU per prenotazioni ristorante. Usa SOLO la function extract_booking per estrarre i campi. NESSUN testo libero.';
+  const messages = [
+    { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
+    { role: 'user', content: [{ type: 'text', text }] },
+  ];
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
-
-function sleep(ms: number) {
-  return new Promise((r) => setTimeout(r, ms));
-}
-
-const toolSchema = {
-  name: 'extract_booking_or_smalltalk',
-  description:
-    'Estrai intent e campi prenotazione o identifica small talk/FAQ. Rispondi in italiano amichevole.',
-  parameters: {
-    type: 'object',
-    properties: {
-      intent: {
-        type: 'string',
-        enum: [
-          'booking.create',
-          'booking.modify',
-          'booking.cancel',
-          'info.hours',
-          'info.menu',
-          'info.address',
-          'greeting',
-          'smalltalk',
-          'unknown',
-        ],
-      },
-      confidence: { type: 'number' },
-      fields: {
+  const tool = {
+    type: 'function',
+    function: {
+      name: 'extract_booking',
+      description: 'Estrai i dettagli della prenotazione',
+      parameters: {
         type: 'object',
         properties: {
+          intent: { type: 'string', enum: ['booking.create'] },
           date: { type: 'string' },
           time: { type: 'string' },
           people: { type: 'number' },
@@ -68,109 +117,85 @@ const toolSchema = {
           phone: { type: 'string' },
           notes: { type: 'string' },
         },
+        required: ['intent'],
       },
-      missing_fields: {
-        type: 'array',
-        items: { type: 'string' },
-      },
-      reply: { type: 'string' },
-      next_action: {
-        type: 'string',
-        enum: [
-          'ask_clarification',
-          'check_availability',
-          'answer_info',
-          'smalltalk',
-          'handoff',
-        ],
-      },
+      strict: true,
     },
-    required: ['intent', 'confidence', 'fields', 'next_action'],
-  },
-};
+  } as const;
 
-export async function parseBookingIntent(
-  text: string,
-  context?: {
-    phone?: string;
-    tenantName?: string;
-    nowIso?: string;
-    locale?: string;
-    timezone?: string;
-  },
-): Promise<NluParsed> {
-  const locale = context?.locale || process.env.LOCALE || 'it-IT';
-  const timezone = context?.timezone || process.env.TIMEZONE || 'Europe/Rome';
-  const system = `Sei l'assistente prenotazioni${
-    context?.tenantName ? ` di ${context.tenantName}` : ''
-  }. Interpreta date/ore in timezone ${timezone} e lingua ${locale}. Parla in modo amichevole e conciso. Se l'utente non prenota rispondi brevemente e chiedi se vuole prenotare.`;
-
-  const messages = [
-    { role: 'system' as const, content: system },
-    { role: 'user' as const, content: text },
-  ];
-
-  const maxAttempts = 3;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+  for (let attempt = 0; attempt < 2; attempt++) {
     try {
-      const res = await openai.chat.completions.create({
-        model: MODEL,
-        temperature: 0,
-        max_tokens: 150,
-        messages,
-        functions: [toolSchema],
-        function_call: 'auto',
-      });
-      const choice = res.choices[0];
-      const fc = choice.message?.function_call;
-      if (!fc?.arguments) throw new Error('no function call');
-      let json: unknown;
-        try {
-          json = JSON.parse(fc.arguments);
-        } catch {
-          throw new Error('invalid json');
-        }
-      const parsed = NluParsedSchema.safeParse(json);
-      if (!parsed.success) {
-        throw new Error('validation failed');
-      }
-      const data = parsed.data;
-      const fields = data.fields;
-      const missing: string[] = data.missing_fields ? [...data.missing_fields] : [];
-      if (fields.date && !/^\d{4}-\d{2}-\d{2}$/.test(fields.date)) {
-        delete fields.date;
-        missing.push('date');
-      }
-      if (fields.time && !/^\d{2}:\d{2}$/.test(fields.time)) {
-        delete fields.time;
-        missing.push('time');
-      }
-      if (fields.people && fields.people < 1) {
-        delete fields.people;
-        missing.push('people');
-      }
-      if (fields.name) fields.name = fields.name.trim();
-      if (!fields.phone && context?.phone) fields.phone = context.phone;
-      return { ...data, fields, missing_fields: missing };
-      } catch (err: unknown) {
-        const e = err as { status?: number };
-        const status = e.status ?? 0;
-        const isRetryable = status === 429 || (status >= 500 && status <= 599);
-        logger.warn({ err: e, attempt }, 'openai nlu error');
-      if (isRetryable && attempt < maxAttempts) {
-        await sleep(500 * Math.pow(3, attempt - 1));
-        continue;
-      }
-      break;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const res = await openai.responses.create({
+          model: MODEL,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          input: messages as any,
+          temperature: 0.2,
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          tools: [tool] as any,
+          tool_choice: 'required',
+        });
+      const output = (res as unknown as { output?: Array<{ type: string; tool_call?: { function?: { arguments?: string } } }> }).output || [];
+      const call = output.find((c) => c.type === 'tool_call');
+      const args = call?.tool_call?.function?.arguments;
+      if (!args) throw new Error('no function call');
+      const parsed = extractBookingSchema.safeParse(JSON.parse(args));
+      if (!parsed.success) throw new Error('invalid json');
+      const fields = parsed.data;
+      const missing = ['people', 'date', 'time', 'name'].filter(
+        (k) => (fields as Record<string, unknown>)[k] == null,
+      );
+      return {
+        intent: 'booking.create',
+        confidence: 0.9,
+        fields,
+        missing_fields: missing,
+        next_action: missing.length ? 'ask_missing' : 'check_availability',
+      };
+    } catch (err) {
+      logger.warn({ err, attempt }, 'openai nlu warn');
+      messages[0].content = [
+        {
+          type: 'text',
+          text: 'Sei un NLU per prenotazioni. RISPOSTA SOLO CON FUNCTION CALL, NESSUN TESTO LIBERO.',
+        },
+      ];
     }
+  }
+
+  // Fallback regex parser
+  const fields: Record<string, unknown> = {};
+  const peopleMatch = text.match(/(?:per|siamo in|siamo|x)\s*(\d{1,2})/i);
+  if (peopleMatch) fields.people = Number(peopleMatch[1]);
+  const dateMatch = text.match(/(\d{1,2}[\/\-]\d{1,2}|oggi|domani)/i);
+  if (dateMatch) fields.date = dateMatch[1];
+  const timeMatch = text.match(/alle\s*(\d{1,2})(?:[:.](\d{2}))?/i);
+  if (timeMatch) {
+    const hh = timeMatch[1].padStart(2, '0');
+    const mm = (timeMatch[2] || '00').padStart(2, '0');
+    fields.time = `${hh}:${mm}`;
+  }
+  const nameMatch = text.match(/a nome\s+(\w+)/i);
+  if (nameMatch) fields.name = nameMatch[1];
+
+  if (Object.keys(fields).length) {
+    const missing = ['people', 'date', 'time', 'name'].filter(
+      (k) => fields[k] == null,
+    );
+    return {
+      intent: 'booking.create',
+      confidence: 0.6,
+      fields,
+      missing_fields: missing,
+      next_action: missing.length ? 'ask_missing' : 'check_availability',
+    };
   }
 
   return {
     intent: 'unknown',
     confidence: 0,
-    fields: context?.phone ? { phone: context.phone } : {},
+    fields: {},
     missing_fields: [],
-    reply: 'Posso aiutarti con le prenotazioni o info del locale 😄',
-    next_action: 'smalltalk',
+    next_action: 'none',
   };
 }

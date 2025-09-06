@@ -11,7 +11,6 @@ router.get('/', async (req: Request, res: Response) => {
   const phone = req.header('X-Phone') || undefined;
   const result = await parseBookingIntent(text, {
     phone,
-    tenantName: req.tenant?.name,
     locale: process.env.LOCALE,
     timezone: process.env.TIMEZONE,
   });

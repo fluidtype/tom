@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db/client';
 import { processInboundText } from '../services/booking/booking.service';
+import { sendTextMessage } from '../services/whatsapp';
 
 const router = Router();
 
@@ -141,13 +142,29 @@ router.post('/', async (req: Request, res: Response) => {
               continue;
             }
 
-            await processInboundText({
-              tenant,
-              from,
-              body,
-              messageId,
-              log: req.log,
-            });
+            try {
+              await processInboundText({
+                tenant,
+                from,
+                body,
+                messageId,
+                log: req.log,
+              });
+            } catch (err) {
+              req.log?.warn({ err, messageId }, 'openai nlu warn');
+              const phoneNumberId =
+                tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+              const token = tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
+              if (phoneNumberId && token) {
+                await sendTextMessage({
+                  to: from,
+                  body: 'Scusami, non ho colto tutto. Quante persone siete?',
+                  phoneNumberId,
+                  token,
+                  log: req.log,
+                });
+              }
+            }
 
             req.log?.info(
               { tenant: tenant.slug, resolveVia, phoneNumberId, messageId, from, body },
