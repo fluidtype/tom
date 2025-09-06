@@ -19,7 +19,8 @@ export type NluResult = {
   next_action: 'check_availability' | 'ask_missing' | 'answer_smalltalk' | 'none';
 };
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const openai: any = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 const MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 function detectSmalltalk(text: string): NluResult | null {
@@ -120,7 +121,6 @@ export async function parseBookingIntent(
     'Sei un NLU per prenotazioni ristorante. Usa SOLO la function extract_booking per estrarre i campi. NESSUN testo libero.';
 
   logger.debug({ text }, 'nlu input');
-  logger.debug({ tool_choice: 'extract_booking' }, 'nlu openai call');
 
   for (let attempt = 0; attempt < 2; attempt++) {
     try {
@@ -130,29 +130,37 @@ export async function parseBookingIntent(
           { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
           { role: 'user', content: [{ type: 'input_text', text }] },
         ],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        tools: [EXTRACT_BOOKING_TOOL as any],
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        tool_choice: { type: 'function', function_name: 'extract_booking' } as any,
+        tools: [EXTRACT_BOOKING_TOOL],
         temperature: 0.2,
       });
 
-      // ✅ estrazione robusta della tool call (supporta diverse varianti SDK)
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const output = (res as any)?.output ?? [];
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const toolCall = output.find((c: any) => c.type === 'tool_call');
-      const rawArgs =
-        toolCall?.tool_call?.function?.arguments ??
-        toolCall?.tool_call?.arguments ??
-        toolCall?.content?.[0]?.function_call?.arguments;
+      type RespItem = {
+        type: string;
+        arguments?: string;
+        tool_call?: { function?: { arguments?: string }; arguments?: string };
+        content?: Array<{ function_call?: { arguments?: string } }>;
+      };
 
-      if (!rawArgs) throw new Error('no function call');
+      const output = (res as unknown as { output?: RespItem[] }).output ?? [];
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      let parsedJson: any;
+      let argsJson: string | undefined;
+      const funcItem = output.find((c) => c.type === 'function_call');
+      if (funcItem?.arguments) {
+        argsJson = funcItem.arguments;
+      }
+      if (!argsJson) {
+        const toolItem = output.find((c) => c.type === 'tool_call');
+        argsJson =
+          toolItem?.tool_call?.function?.arguments ??
+          toolItem?.tool_call?.arguments ??
+          toolItem?.content?.[0]?.function_call?.arguments;
+      }
+
+      if (!argsJson) throw new Error('no function call');
+
+      let parsedJson: unknown;
       try {
-        parsedJson = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
+        parsedJson = JSON.parse(argsJson);
       } catch {
         throw new Error('invalid json');
       }
