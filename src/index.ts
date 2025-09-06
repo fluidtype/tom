@@ -72,11 +72,13 @@ app.use('/healthz', publicLimiter, healthRouter);
 // Webhook WhatsApp (no tenant resolver)
 app.use('/webhook/whatsapp', webhookLimiter, whatsappWebhook);
 
+// Availability PRIMA del tenantResolver
+app.use('/availability', availabilityRouter);
+
 // da qui in poi rotte “business” che richiedono il tenant
 app.use(tenantResolver);
 app.use('/nlu', nluRouter);
 app.use('/whoami', whoami);
-app.use('/availability', availabilityRouter);
 
 // 404 handler
 app.use((req, res) => {
