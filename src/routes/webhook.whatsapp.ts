@@ -1,7 +1,7 @@
 import { Router, Request, Response } from 'express';
 import { z } from 'zod';
 import { prisma } from '../db/client';
-import { sendTextMessage } from '../services/whatsapp';
+import { processInboundText } from '../services/booking/booking.service';
 
 const router = Router();
 
@@ -141,29 +141,13 @@ router.post('/', async (req: Request, res: Response) => {
               continue;
             }
 
-            // TODO: parseBookingIntent(body) to drive next steps
-
-            const phoneNumberIdEnv = process.env.WHATSAPP_PHONE_NUMBER_ID;
-            const tokenEnv = process.env.WHATSAPP_TOKEN;
-            const phoneNumberIdOut = tenant.whatsappPhoneId || phoneNumberIdEnv;
-            const token = tenant.whatsappToken || tokenEnv;
-
-            if (!phoneNumberIdOut || !token) {
-              req.log?.warn({ tenant: tenant.slug }, 'wa outbound skipped: missing phoneNumberId/token');
-            } else {
-              const reply = `Grazie ${tenant.name}! Messaggio ricevuto: "${body}"\nTi rispondiamo a breve.`;
-              const result = await sendTextMessage({
-                to: from,
-                body: reply,
-                phoneNumberId: phoneNumberIdOut,
-                token,
-                log: req.log,
-              });
-
-              if (!result.ok) {
-                req.log?.warn({ result, tenant: tenant.slug, to: from }, 'wa outbound failed');
-              }
-            }
+            await processInboundText({
+              tenant,
+              from,
+              body,
+              messageId,
+              log: req.log,
+            });
 
             req.log?.info(
               { tenant: tenant.slug, resolveVia, phoneNumberId, messageId, from, body },
