@@ -20,6 +20,19 @@ type Session = {
 const SESSIONS = new Map<string, Session>();
 const TTL_MS = 30 * 60 * 1000;
 
+const LAST_SEND = new Map<string, { text: string; at: number }>();
+const DEBOUNCE_MS = 2000;
+
+function shouldSkipSend(key: string, text: string): boolean {
+  const now = Date.now();
+  const prev = LAST_SEND.get(key);
+  if (prev && prev.text === text && now - prev.at < DEBOUNCE_MS) {
+    return true;
+  }
+  LAST_SEND.set(key, { text, at: now });
+  return false;
+}
+
 function getSession(key: string): Session {
   const now = Date.now();
   const s = SESSIONS.get(key);
@@ -53,6 +66,13 @@ async function reply(args: {
   const phoneNumberId =
     args.tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
   const token = args.tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
+
+  const debKey = `${args.tenant.slug}:${args.to}`;
+  if (shouldSkipSend(debKey, args.text)) {
+    args.log?.info({ debKey }, 'reply skipped by debounce');
+    return;
+  }
+
   if (!phoneNumberId || !token) {
     args.log?.warn({ tenant: args.tenant.slug }, 'missing WA credentials, skipping reply');
     return;
@@ -95,8 +115,8 @@ export async function processInboundText(args: {
   }
 
   if (nlu.intent === 'smalltalk.info') {
-    if (nlu.reply) await reply({ tenant, to: from, text: nlu.reply, log });
-    await reply({ tenant, to: from, text: 'Vuoi prenotare? Dimmi solo quante persone.', log });
+    const text = nlu.reply ?? 'Vuoi prenotare? Dimmi solo quante persone.';
+    await reply({ tenant, to: from, text, log });
     return;
   }
 

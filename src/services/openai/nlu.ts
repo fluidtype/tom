@@ -97,8 +97,8 @@ export async function parseBookingIntent(
   const systemPrompt =
     'Sei un NLU per prenotazioni ristorante. Usa SOLO la function extract_booking per estrarre i campi. NESSUN testo libero.';
   const messages = [
-    { role: 'system', content: [{ type: 'text', text: systemPrompt }] },
-    { role: 'user', content: [{ type: 'text', text }] },
+    { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+    { role: 'user', content: [{ type: 'input_text', text }] },
   ];
 
   const tool = {
@@ -156,7 +156,7 @@ export async function parseBookingIntent(
       logger.warn({ err, attempt }, 'openai nlu warn');
       messages[0].content = [
         {
-          type: 'text',
+          type: 'input_text',
           text: 'Sei un NLU per prenotazioni. RISPOSTA SOLO CON FUNCTION CALL, NESSUN TESTO LIBERO.',
         },
       ];
