@@ -87,6 +87,30 @@ const extractBookingSchema = z.object({
   notes: z.string().optional(),
 });
 
+// ✅ Tool definition corretta per Responses API + schema chiuso
+const EXTRACT_BOOKING_TOOL = {
+  type: 'function',
+  function: {
+    name: 'extract_booking',
+    description:
+      'Estrai i dettagli della prenotazione da un messaggio naturale in italiano.',
+    parameters: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        intent: { type: 'string', enum: ['booking.create'] },
+        date: { type: 'string', description: 'Data ISO (YYYY-MM-DD)' },
+        time: { type: 'string', description: 'Ora HH:mm nel fuso del ristorante' },
+        people: { type: 'number', minimum: 1 },
+        name: { type: 'string' },
+        phone: { type: 'string' },
+        notes: { type: 'string' },
+      },
+      required: ['intent'],
+    },
+  },
+} as const;
+
 export async function parseBookingIntent(
   text: string,
   _context?: { phone?: string; locale?: string; timezone?: string },
@@ -94,86 +118,70 @@ export async function parseBookingIntent(
   const small = detectSmalltalk(text);
   if (small) return small;
 
-  const systemPrompt =
+  let systemPrompt =
     'Sei un NLU per prenotazioni ristorante. Usa SOLO la function extract_booking per estrarre i campi. NESSUN testo libero.';
-  const messages = [
-    { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
-    { role: 'user', content: [{ type: 'input_text', text }] },
-  ];
-
-  const tool = {
-    type: 'function',
-    name: 'extract_booking',
-    description: 'Estrai i dettagli della prenotazione',
-    parameters: {
-      type: 'object',
-      properties: {
-        intent: { type: 'string', enum: ['booking.create'] },
-        date: { type: 'string' },
-        time: { type: 'string' },
-        people: { type: 'number' },
-        name: { type: 'string' },
-        phone: { type: 'string' },
-        notes: { type: 'string' },
-      },
-      required: ['intent'],
-    },
-    strict: true,
-  } as const;
 
   logger.debug({ text }, 'nlu input');
   logger.debug({ tool_choice: 'extract_booking' }, 'nlu openai call');
 
-for (let attempt = 0; attempt < 2; attempt++) {
-  try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
       const res = await openai.responses.create({
         model: MODEL,
+        input: [
+          { role: 'system', content: [{ type: 'input_text', text: systemPrompt }] },
+          { role: 'user', content: [{ type: 'input_text', text }] },
+        ],
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        input: messages as any,
+        tools: [EXTRACT_BOOKING_TOOL as any],
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        tool_choice: { type: 'function', function: { name: 'extract_booking' } } as any,
         temperature: 0.2,
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        tools: [tool] as any,
-        tool_choice: { type: 'function', function_name: 'extract_booking' } as any,
       });
-    const output = (
-      res as unknown as {
-        output?: Array<{
-          type: string;
-          tool_call?: {
-            function?: { arguments?: string };
-            arguments?: string;
-          };
-        }>;
+
+      // ✅ estrazione robusta della tool call (supporta diverse varianti SDK)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const output = (res as any)?.output ?? [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const toolCall = output.find((c: any) => c.type === 'tool_call');
+      const rawArgs =
+        toolCall?.tool_call?.function?.arguments ??
+        toolCall?.tool_call?.arguments ??
+        toolCall?.content?.[0]?.function_call?.arguments;
+
+      if (!rawArgs) throw new Error('no function call');
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let parsedJson: any;
+      try {
+        parsedJson = typeof rawArgs === 'string' ? JSON.parse(rawArgs) : rawArgs;
+      } catch {
+        throw new Error('invalid json');
       }
-    ).output || [];
-    const call = output.find((c) => c.type === 'tool_call');
-    const args = call?.tool_call?.function?.arguments || call?.tool_call?.arguments;
-    if (!args) throw new Error('no function call');
-    const parsed = extractBookingSchema.safeParse(JSON.parse(args));
-    if (!parsed.success) throw new Error('invalid json');
-    const fields = parsed.data;
-    const missing = ['people', 'date', 'time', 'name'].filter(
-      (k) => (fields as Record<string, unknown>)[k] == null,
-    );
-    logger.debug({ fields, missing }, 'nlu tool result');
-    return {
-      intent: 'booking.create',
-      confidence: 0.9,
-      fields,
-      missing_fields: missing,
-      next_action: missing.length ? 'ask_missing' : 'check_availability',
-    };
-  } catch (err) {
-    logger.warn({ err, attempt }, 'openai nlu warn');
-    messages[0].content = [
-      {
-        type: 'input_text',
-        text: 'Sei un NLU per prenotazioni. RISPOSTA SOLO CON FUNCTION CALL, NESSUN TESTO LIBERO.',
-      },
-    ];
+
+      const parsed = extractBookingSchema.safeParse(parsedJson);
+      if (!parsed.success) throw new Error('invalid json');
+
+      const fields = parsed.data;
+      const missing = ['people', 'date', 'time', 'name'].filter(
+        (k) => (fields as Record<string, unknown>)[k] == null,
+      );
+
+      logger.debug({ fields, missing }, 'nlu tool result');
+
+      return {
+        intent: 'booking.create',
+        confidence: 0.9,
+        fields,
+        missing_fields: missing,
+        next_action: missing.length ? 'ask_missing' : 'check_availability',
+      };
+    } catch (err) {
+      logger.warn({ err, attempt }, 'openai nlu warn');
+      systemPrompt =
+        'Sei un NLU per prenotazioni. RISPOSTA SOLO CON FUNCTION CALL, NESSUN TESTO LIBERO.';
+    }
   }
-}
 
   // Fallback regex parser
   const fields: Record<string, unknown> = {};
