@@ -13,6 +13,7 @@ import { errorHandler } from './middlewares/errorHandler';
 import { tenantResolver } from './middlewares/tenantResolver';
 import whoami from './routes/whoami';
 import nluRouter from './routes/nlu';
+import availabilityRouter from './routes/availability';
 
 const app = express();
 
@@ -75,6 +76,7 @@ app.use('/webhook/whatsapp', webhookLimiter, whatsappWebhook);
 app.use(tenantResolver);
 app.use('/nlu', nluRouter);
 app.use('/whoami', whoami);
+app.use('/availability', availabilityRouter);
 
 // 404 handler
 app.use((req, res) => {
