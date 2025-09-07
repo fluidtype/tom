@@ -12,6 +12,15 @@ export type PendingBooking = {
 
 export type SessionData = {
   pendingBooking?: PendingBooking;
+  pendingCancel?: { bookingId: string; expiresAt: number };
+  pendingModify?: {
+    bookingId: string;
+    date?: string;
+    time?: string;
+    people?: number;
+    notes?: string;
+    expiresAt: number;
+  };
   lastOutboundAt?: number;
 };
 
@@ -61,6 +70,72 @@ export function getPendingIfValid(tenantId: string, phone: string): PendingBooki
   return pending;
 }
 
+export function setPendingCancel(
+  tenantId: string,
+  phone: string,
+  bookingId: string,
+  ttlMs: number = DEFAULT_TTL_MS,
+): void {
+  const s = getSession(tenantId, phone);
+  s.pendingCancel = { bookingId, expiresAt: Date.now() + ttlMs };
+  store.set(key(tenantId, phone), s);
+}
+
+export function getPendingCancelIfValid(
+  tenantId: string,
+  phone: string,
+): { bookingId: string } | undefined {
+  const s = getSession(tenantId, phone);
+  const p = s.pendingCancel;
+  if (!p) return undefined;
+  if (p.expiresAt < Date.now()) {
+    delete s.pendingCancel;
+    return undefined;
+  }
+  return { bookingId: p.bookingId };
+}
+
+export function clearPendingCancel(tenantId: string, phone: string): void {
+  const s = getSession(tenantId, phone);
+  delete s.pendingCancel;
+}
+
+export function setPendingModify(
+  tenantId: string,
+  phone: string,
+  payload: { bookingId: string; date?: string; time?: string; people?: number; notes?: string },
+  ttlMs: number = DEFAULT_TTL_MS,
+): void {
+  const s = getSession(tenantId, phone);
+  s.pendingModify = { ...payload, expiresAt: Date.now() + ttlMs };
+  store.set(key(tenantId, phone), s);
+}
+
+export function getPendingModifyIfValid(
+  tenantId: string,
+  phone: string,
+): {
+  bookingId: string;
+  date?: string;
+  time?: string;
+  people?: number;
+  notes?: string;
+} | undefined {
+  const s = getSession(tenantId, phone);
+  const p = s.pendingModify;
+  if (!p) return undefined;
+  if (p.expiresAt < Date.now()) {
+    delete s.pendingModify;
+    return undefined;
+  }
+  return p;
+}
+
+export function clearPendingModify(tenantId: string, phone: string): void {
+  const s = getSession(tenantId, phone);
+  delete s.pendingModify;
+}
+
 export function setLastOutboundNow(tenantId: string, phone: string): void {
   const s = getSession(tenantId, phone);
   s.lastOutboundAt = Date.now();
@@ -72,5 +147,11 @@ export default {
   setPending,
   clearSession,
   getPendingIfValid,
+  setPendingCancel,
+  getPendingCancelIfValid,
+  clearPendingCancel,
+  setPendingModify,
+  getPendingModifyIfValid,
+  clearPendingModify,
   setLastOutboundNow,
 };

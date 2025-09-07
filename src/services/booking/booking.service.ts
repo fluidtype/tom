@@ -1,7 +1,7 @@
 import type { Logger } from 'pino';
 import { sendTextMessage } from '../whatsapp';
 import { parseBookingIntent } from '../openai/nlu';
-import { checkAvailability } from './availability';
+import { checkAvailability, suggestAlternatives } from './availability';
 import { tenantRules } from './rules.index';
 import {
   parseRelativeDateToken,
@@ -9,6 +9,7 @@ import {
   formatHuman,
   addMinutes,
   toDateTime,
+  toIsoDate,
 } from '../../utils/datetime';
 import { prisma } from '../../db/client';
 import {
@@ -17,6 +18,12 @@ import {
   setPending,
   clearSession,
   setLastOutboundNow,
+  setPendingCancel,
+  getPendingCancelIfValid,
+  clearPendingCancel,
+  setPendingModify,
+  getPendingModifyIfValid,
+  clearPendingModify,
 } from '../session/store';
 
 // Trova la prima prenotazione futura (o in corso) per questo numero
@@ -49,6 +56,10 @@ async function hasOverlapForSameUser(
     },
   });
   return count > 0;
+}
+
+function formatAltSlots(slots: string[]): string {
+  return slots.slice(0, 3).join(' o ');
 }
 
 function normalizeForIntent(s: string): string {
@@ -128,11 +139,49 @@ export async function processInboundText(args: {
   const words = norm.split(' ').filter(Boolean);
 
   const pending = getPendingIfValid(tenant.id, from);
+  const pendingCancel = getPendingCancelIfValid(tenant.id, from);
+  const pendingModify = getPendingModifyIfValid(tenant.id, from);
 
   const CONFIRM_TOKENS = ['confermo', 'conferma', 'ok', 'va bene', 'si', 'perfetto', 'procedi'];
   const CANCEL_TOKENS = ['annulla', 'cancella', 'no', 'non va bene', 'stop', 'annullare', 'annullato'];
 
   if (isTokenMatch(norm, CONFIRM_TOKENS)) {
+    if (pendingCancel) {
+      await prisma.booking.update({
+        where: { id: pendingCancel.bookingId },
+        data: { status: 'cancelled' },
+      });
+      await reply({ tenant, to: from, text: '❌ Prenotazione annullata. Vuoi crearne una nuova?', log });
+      clearPendingCancel(tenant.id, from);
+      return;
+    }
+    if (pendingModify) {
+      const { bookingId, date, time, people, notes } = pendingModify;
+      const rules = tenantRules[tenant.slug] || { tableDuration: 120, slotMinutes: 15 };
+      const startAt = toDateTime(date!, time!);
+      const endAt = toDateTime(date!, addMinutes(time!, rules.tableDuration));
+      const recheck = await checkAvailability(tenant.slug, date!, time!, people!, {
+        tenantId: tenant.id,
+      });
+      if (!recheck.ok) {
+        await reply({ tenant, to: from, text: 'Non è più disponibile. Riproviamo?', log });
+        clearPendingModify(tenant.id, from);
+        return;
+      }
+      await prisma.booking.update({
+        where: { id: bookingId },
+        data: {
+          startAt,
+          endAt,
+          people: people!,
+          notes: notes || null,
+        },
+      });
+      await reply({ tenant, to: from, text: `✅ Modifica confermata per ${formatHuman(date!, time!)}.`, log });
+      clearPendingModify(tenant.id, from);
+      clearSession(tenant.id, from);
+      return;
+    }
     if (!pending) {
       await reply({ tenant, to: from, text: 'Non ho una prenotazione in attesa. Vuoi crearne una?', log });
       return;
@@ -141,36 +190,19 @@ export async function processInboundText(args: {
     const rules = tenantRules[tenant.slug] || { tableDuration: 120, slotMinutes: 15 };
     const startAt = toDateTime(date, time);
     const endAt = toDateTime(date, addMinutes(time, rules.tableDuration));
-
-    const recheck = await checkAvailability(
-      tenant.slug || 'demo',
-      date,
-      time,
-      people,
-      { tenantId: tenant.id },
-    );
+    const recheck = await checkAvailability(tenant.slug, date, time, people, {
+      tenantId: tenant.id,
+    });
     if (!recheck.ok) {
-      await reply({
-        tenant,
-        to: from,
-        text: 'La proposta non è più disponibile. Ripartiamo: dimmi data e ora.',
-        log,
-      });
+      await reply({ tenant, to: from, text: 'La proposta non è più disponibile. Ripartiamo: dimmi data e ora.', log });
       clearSession(tenant.id, from);
       return;
     }
-
     if (await hasOverlapForSameUser(tenant.id, from, startAt, endAt)) {
-      await reply({
-        tenant,
-        to: from,
-        text: 'Hai già una prenotazione a quell’ora. Vuoi modificarla o annullarla?',
-        log,
-      });
+      await reply({ tenant, to: from, text: 'Hai già una prenotazione a quell’ora. Vuoi modificarla o annullarla?', log });
       clearSession(tenant.id, from);
       return;
     }
-
     try {
       await prisma.booking.create({
         data: {
@@ -186,12 +218,7 @@ export async function processInboundText(args: {
           status: 'confirmed',
         },
       });
-      await reply({
-        tenant,
-        to: from,
-        text: `✅ Prenotazione confermata! Ti aspettiamo il ${formatHuman(date, time)}.`,
-        log,
-      });
+      await reply({ tenant, to: from, text: `✅ Prenotazione confermata! Ti aspettiamo il ${formatHuman(date, time)}.`, log });
     } catch (err) {
       log?.error({ err }, 'failed to create booking');
       await reply({ tenant, to: from, text: 'Si è verificato un errore, riprova tra poco.', log });
@@ -206,23 +233,23 @@ export async function processInboundText(args: {
       await reply({ tenant, to: from, text: '❌ Ok, prenotazione annullata. Vuoi provare un altro orario?', log });
       return;
     }
-    const active = await findActiveBookingByPhone(tenant.id, from);
-    if (!active) {
-      await reply({
-        tenant,
-        to: from,
-        text: 'Non trovo prenotazioni attive da annullare. Vuoi crearne una nuova?',
-        log,
-      });
+    if (pendingCancel) {
+      clearPendingCancel(tenant.id, from);
+      await reply({ tenant, to: from, text: 'Ok, annullamento cancellato. Vuoi altro?', log });
       return;
     }
-    await prisma.booking.update({ where: { id: active.id }, data: { status: 'cancelled' } });
-    await reply({
-      tenant,
-      to: from,
-      text: '❌ Ho annullato la tua prenotazione futura. Vuoi fissarne un’altra?',
-      log,
-    });
+    if (pendingModify) {
+      clearPendingModify(tenant.id, from);
+      await reply({ tenant, to: from, text: 'Ok, modifica annullata.', log });
+      return;
+    }
+    const active = await findActiveBookingByPhone(tenant.id, from);
+    if (!active) {
+      await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive da annullare. Vuoi crearne una?', log });
+      return;
+    }
+    setPendingCancel(tenant.id, from, active.id);
+    await reply({ tenant, to: from, text: `Vuoi annullare la prenotazione del ${formatHuman(toIsoDate(active.startAt), active.startAt.toISOString().slice(11,16))}? Scrivi confermo per procedere.`, log });
     return;
   }
 
@@ -244,6 +271,42 @@ export async function processInboundText(args: {
   } catch (err) {
     log?.warn({ err }, 'nlu failure');
     await reply({ tenant, to: from, text: 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
+    return;
+  }
+
+  if (nlu.intent === 'booking.cancel') {
+    const active = await findActiveBookingByPhone(tenant.id, from);
+    if (!active) {
+      await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive a tuo nome. Vuoi crearne una?', log });
+      return;
+    }
+    setPendingCancel(tenant.id, from, active.id);
+    await reply({ tenant, to: from, text: `Confermi l’annullamento della prenotazione del ${formatHuman(toIsoDate(active.startAt), active.startAt.toISOString().slice(11,16))}?`, log });
+    return;
+  }
+
+  if (nlu.intent === 'booking.modify') {
+    const active = await findActiveBookingByPhone(tenant.id, from);
+    if (!active) {
+      await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive da modificare. Vuoi crearne una?', log });
+      return;
+    }
+    const fields = { ...nlu.fields };
+    if (!fields.people) {
+      await reply({ tenant, to: from, text: 'Per quante persone?', log });
+      return;
+    }
+    if (!fields.date) fields.date = toIsoDate(active.startAt);
+    if (!fields.time) fields.time = active.startAt.toISOString().slice(11,16);
+    const avail = await checkAvailability(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });
+    if (!avail.ok) {
+      const alts = await suggestAlternatives(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });
+      const altText = alts.length ? `Non disponibile. Posso proporti ${formatAltSlots(alts)}?` : 'Non disponibile. Vuoi un altro orario?';
+      await reply({ tenant, to: from, text: altText, log });
+      return;
+    }
+    setPendingModify(tenant.id, from, { bookingId: active.id, ...fields });
+    await reply({ tenant, to: from, text: `Aggiorno la prenotazione a ${formatHuman(fields.date, fields.time)} per ${fields.people} persone. Confermi?`, log });
     return;
   }
 

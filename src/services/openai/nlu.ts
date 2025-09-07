@@ -5,7 +5,7 @@ import { demoProfile } from '../../config/tenantProfile.demo';
 import { parseRelativeDateToken, toIsoDate } from '../../utils/datetime';
 
 export type NluResult = {
-  intent: 'booking.create' | 'smalltalk.info' | 'unknown';
+  intent: 'booking.create' | 'booking.modify' | 'booking.cancel' | 'smalltalk.info' | 'unknown';
   confidence: number;
   fields: {
     date?: string;
@@ -85,7 +85,7 @@ const strOpt = z
   .optional();
 
 const extractBookingSchema = z.object({
-  intent: z.literal('booking.create'),
+  intent: z.enum(['booking.create', 'booking.modify', 'booking.cancel']),
   date: strOpt,
   time: strOpt,
   people: z.number().optional(),
@@ -104,7 +104,10 @@ const EXTRACT_BOOKING_TOOL = {
     type: 'object',
     additionalProperties: false,
     properties: {
-      intent: { type: 'string', enum: ['booking.create'] },
+      intent: {
+        type: 'string',
+        enum: ['booking.create', 'booking.modify', 'booking.cancel'],
+      },
       date: { type: 'string', description: 'Data ISO (YYYY-MM-DD)' },
       time: { type: 'string', description: 'Ora HH:mm nel fuso del ristorante' },
       people: { type: 'number', minimum: 1 },
@@ -122,6 +125,14 @@ export async function parseBookingIntent(
 ): Promise<NluResult> {
   const small = detectSmalltalk(text);
   if (small) return small;
+
+  const lower = text.toLowerCase();
+  if (/annull/.test(lower)) {
+    return { intent: 'booking.cancel', confidence: 0.7, fields: {}, missing_fields: [], next_action: 'ask_missing' };
+  }
+  if (/(modific|spost|cambi)/.test(lower)) {
+    return { intent: 'booking.modify', confidence: 0.7, fields: {}, missing_fields: [], next_action: 'ask_missing' };
+  }
 
   const wc = text.trim().split(/\s+/).filter(Boolean).length;
   if (wc <= 2) {
@@ -212,12 +223,20 @@ export async function parseBookingIntent(
 
       logger.debug({ fields, missing }, 'nlu tool result');
 
+      const intent = fields.intent as NluResult['intent'];
+      let next: NluResult['next_action'] = 'none';
+      if (intent === 'booking.create' || intent === 'booking.modify') {
+        next = missing.length ? 'ask_missing' : 'check_availability';
+      } else if (intent === 'booking.cancel') {
+        next = missing.length ? 'ask_missing' : 'none';
+      }
+
       return {
-        intent: 'booking.create',
+        intent,
         confidence: 0.9,
         fields,
         missing_fields: missing,
-        next_action: missing.length ? 'ask_missing' : 'check_availability',
+        next_action: next,
       };
     } catch (err) {
       logger.warn({ err, attempt }, 'openai nlu warn');
@@ -249,9 +268,10 @@ export async function parseBookingIntent(
   const dateMatch = text.match(/(\d{1,2}[\/\-]\d{1,2}|oggi|domani)/i);
   if (dateMatch) {
     const d = dateMatch[1].toLowerCase();
-    fields.date = d;
+    const rel = parseRelativeDateToken(d);
+    if (rel) fields.date = rel; else fields.date = d;
   }
-  const timeMatch = text.match(/alle\s*(\d{1,2})(?:[:.](\d{2}))?/i);
+  const timeMatch = text.match(/(?:alle?\s*)?(\d{1,2})(?:[:\.e](\d{2}))?/i);
   if (timeMatch) {
     const hh = timeMatch[1].padStart(2, '0');
     const mm = (timeMatch[2] || '00').padStart(2, '0');

@@ -65,3 +65,23 @@ export async function checkAvailability(
 
   return { ok: true, reason: 'available' };
 }
+
+export async function suggestAlternatives(
+  tenantSlug: string,
+  date: string,
+  time: string,
+  people: number,
+  opts?: { tenantId?: string },
+) {
+  const rules = tenantRules[tenantSlug];
+  if (!rules) return [] as string[];
+  const candidates: string[] = [];
+  const minutes = [ -rules.slotMinutes, rules.slotMinutes, rules.slotMinutes * 2 ];
+  for (const diff of minutes) {
+    const t = addMinutes(time, diff);
+    const avail = await checkAvailability(tenantSlug, date, t, people, opts);
+    if (avail.ok) candidates.push(t);
+    if (candidates.length >= 3) break;
+  }
+  return candidates;
+}
