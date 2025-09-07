@@ -79,14 +79,19 @@ function detectSmalltalk(text: string): NluResult | null {
   return null;
 }
 
+const strOpt = z
+  .string()
+  .transform((s) => (typeof s === 'string' && s.trim() !== '' ? s.trim() : undefined))
+  .optional();
+
 const extractBookingSchema = z.object({
   intent: z.literal('booking.create'),
-  date: z.string().optional(),
-  time: z.string().optional(),
+  date: strOpt,
+  time: strOpt,
   people: z.number().optional(),
-  name: z.string().optional(),
-  phone: z.string().optional(),
-  notes: z.string().optional(),
+  name: strOpt,
+  phone: strOpt,
+  notes: strOpt,
 });
 
 // ✅ Tool definition compatibile con openai@4.56.0 (schema chiuso)
@@ -170,16 +175,24 @@ export async function parseBookingIntent(
       if (!parsed.success) throw new Error('invalid json');
 
       const fields = parsed.data;
-      if (fields.date) {
+
+      // Type guard: usa la data solo se è una stringa non vuota
+      if (typeof fields.date === 'string' && fields.date.trim() !== '') {
         const rel = parseRelativeDateToken(fields.date);
-        if (rel) fields.date = rel;
-        const today = toIsoDate(new Date(), _context?.timezone || 'Europe/Rome');
-        if (new Date(fields.date) < new Date(today)) {
-          const tomorrow = toIsoDate(
+        if (typeof rel === 'string' && rel.trim() !== '') {
+          fields.date = rel;
+        }
+
+        const tz = _context?.timezone || 'Europe/Rome';
+        const todayIso = toIsoDate(new Date(), tz);
+
+        // new Date() accetta string: fields.date garantito string
+        if (new Date(fields.date) < new Date(todayIso)) {
+          const tomorrowIso = toIsoDate(
             new Date(Date.now() + 24 * 60 * 60 * 1000),
-            _context?.timezone || 'Europe/Rome',
+            tz,
           );
-          fields.date = tomorrow;
+          fields.date = tomorrowIso;
         }
       }
       const missing = ['people', 'date', 'time', 'name'].filter(
@@ -236,16 +249,24 @@ export async function parseBookingIntent(
   const nameMatch = text.match(/a nome\s+(\w+)/i);
   if (nameMatch) fields.name = nameMatch[1];
 
-  if (fields.date) {
-    const rel = parseRelativeDateToken(fields.date);
-    if (rel) fields.date = rel;
-    const today = toIsoDate(new Date(), _context?.timezone || 'Europe/Rome');
-    if (new Date(fields.date) < new Date(today)) {
-      fields.date = toIsoDate(
+  if (typeof fields.date === 'string' && fields.date.trim() !== '') {
+    let dateStr = fields.date;
+    const rel = parseRelativeDateToken(dateStr);
+    if (typeof rel === 'string' && rel.trim() !== '') {
+      dateStr = rel;
+    }
+
+    const tz = _context?.timezone || 'Europe/Rome';
+    const todayIso = toIsoDate(new Date(), tz);
+
+    if (new Date(dateStr) < new Date(todayIso)) {
+      dateStr = toIsoDate(
         new Date(Date.now() + 24 * 60 * 60 * 1000),
-        _context?.timezone || 'Europe/Rome',
+        tz,
       );
     }
+
+    fields.date = dateStr;
   }
 
   if (Object.keys(fields).length) {
