@@ -119,18 +119,26 @@ router.post('/', async (req: Request, res: Response) => {
 
           for (const m of val.messages) {
             let body: string | undefined;
-            const mAny = m as any;
             if (m.type === 'text') {
-              body = mAny.text.body ?? '';
+              body = (m as { text: { body?: string } }).text.body ?? '';
             } else if (m.type === 'interactive') {
-              const itype = mAny.interactive?.type;
-              if (itype === 'button_reply') {
-                const id = mAny.interactive.button_reply?.id;
-                if (id === 'confirm') body = 'confermo';
-                else if (id === 'cancel') body = 'annulla';
-              } else if (itype === 'list_reply') {
-                const id = mAny.interactive.list_reply?.id;
-                if (id && id.startsWith('slot_')) body = id.replace('slot_', '');
+              const interactive = (m as {
+                interactive?: {
+                  type?: string;
+                  button_reply?: { id?: string };
+                  list_reply?: { id?: string };
+                };
+              }).interactive;
+              if (interactive) {
+                const itype = interactive.type;
+                if (itype === 'button_reply') {
+                  const id = interactive.button_reply?.id;
+                  if (id === 'confirm') body = 'confermo';
+                  else if (id === 'cancel') body = 'annulla';
+                } else if (itype === 'list_reply') {
+                  const id = interactive.list_reply?.id;
+                  if (id && id.startsWith('slot_')) body = id.replace('slot_', '');
+                }
               }
             }
             if (!body) continue;
