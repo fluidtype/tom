@@ -12,7 +12,8 @@ export type NluResult = {
     | 'availability.query'
     | 'smalltalk.info'
     | 'greeting'
-    | 'unknown';
+    | 'unknown'
+    | 'general.chat';
   confidence: number;
   fields: {
     date?: string;
@@ -325,17 +326,17 @@ export async function parseBookingIntent(
     );
     logger.debug({ fields, missing }, 'nlu fallback result');
     return {
-      intent: 'booking.create',
-      confidence: 0.6,
-      fields,
-      missing_fields: missing,
-      next_action: missing.length ? 'ask_missing' : 'check_availability',
-    };
+    intent: 'booking.create',
+    confidence: 0.6,
+    fields,
+    missing_fields: missing,
+    next_action: missing.length ? 'ask_missing' : 'check_availability',
+  };
   }
 
   return {
-    intent: 'unknown',
-    confidence: 0,
+    intent: 'general.chat',
+    confidence: 0.4,
     fields: {},
     missing_fields: [],
     next_action: 'none',

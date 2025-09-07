@@ -1,9 +1,11 @@
 import type { Logger } from 'pino';
 import { sendTextMessage } from '../whatsapp';
 import { parseBookingIntent } from '../openai/nlu';
+import { generateReply } from '../openai/dialogue';
 import { say } from '../nlg';
 import { checkAvailability, suggestAlternatives } from './availability';
 import { tenantRules } from './rules.index';
+import { demoProfile } from '../../config/tenantProfile.demo';
 import {
   parseRelativeDateToken,
   alignToSlot,
@@ -25,6 +27,8 @@ import {
   setPendingModify,
   getPendingModifyIfValid,
   clearPendingModify,
+  setDraft,
+  getDraft,
 } from '../session/store';
 
 // Trova la prima prenotazione futura (o in corso) per questo numero
@@ -74,6 +78,54 @@ function normalizeForIntent(s: string): string {
     .replace(/\s+/g, ' ');
 }
 
+function normalize(s: string) {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^\p{L}\p{N}\s]/gu, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
+}
+
+function isAffirmative(t: string) {
+  t = normalize(t);
+  const w = [
+    'confermo',
+    'conferma',
+    'ok',
+    'okay',
+    'va bene',
+    'si',
+    'sì',
+    'perfetto',
+    'procedi',
+    'vai',
+    'va',
+  ];
+  return w.some(
+    (x) =>
+      t === x ||
+      t.startsWith(x + ' ') ||
+      t.includes(' ' + x + ' ') ||
+      t.endsWith(' ' + x),
+  );
+}
+
+function isNegative(t: string) {
+  t = normalize(t);
+  const w = [
+    'annulla',
+    'cancella',
+    'no',
+    'non va bene',
+    'stop',
+    'annullare',
+    'annullato',
+  ];
+  return w.some((x) => t.includes(x));
+}
+
 async function reply(args: {
   tenant: { slug: string; whatsappPhoneId?: string | null; whatsappToken?: string | null; id: string };
   to: string;
@@ -106,14 +158,6 @@ async function reply(args: {
   setLastOutboundNow(args.tenant.id, args.to);
 }
 
-function isTokenMatch(text: string, tokens: string[]): boolean {
-  const words = text.split(' ').filter(Boolean);
-  if (words.length <= 3) {
-    return tokens.includes(text);
-  }
-  return tokens.some((t) => text.startsWith(t + ' '));
-}
-
 function isShortWhitelisted(text: string): boolean {
   if (/^\d+\s*(persone|persona)?$/.test(text)) return true;
   if (/per\s*\d+$/.test(text)) return true;
@@ -143,10 +187,7 @@ export async function processInboundText(args: {
   const pendingCancel = getPendingCancelIfValid(tenant.id, from);
   const pendingModify = getPendingModifyIfValid(tenant.id, from);
 
-  const CONFIRM_TOKENS = ['confermo', 'conferma', 'ok', 'va bene', 'si', 'perfetto', 'procedi'];
-  const CANCEL_TOKENS = ['annulla', 'cancella', 'no', 'non va bene', 'stop', 'annullare', 'annullato'];
-
-  if (isTokenMatch(norm, CONFIRM_TOKENS)) {
+  if (isAffirmative(norm)) {
     if (pendingCancel) {
       await prisma.booking.update({
         where: { id: pendingCancel.bookingId },
@@ -228,7 +269,7 @@ export async function processInboundText(args: {
     return;
   }
 
-  if (isTokenMatch(norm, CANCEL_TOKENS)) {
+  if (isNegative(norm)) {
     if (pending) {
       clearSession(tenant.id, from);
       await reply({ tenant, to: from, text: '❌ Ok, prenotazione annullata. Vuoi provare un altro orario?', log });
@@ -254,6 +295,43 @@ export async function processInboundText(args: {
     return;
   }
 
+  if (/^(per\s*)?\d+$/.test(norm)) {
+    const num = parseInt(norm.replace(/per\s*/g, ''), 10);
+    setDraft(tenant.id, from, { people: num });
+    const d = getDraft(tenant.id, from);
+    if (!d.date) {
+      await reply({ tenant, to: from, text: say('ask_date'), log });
+      return;
+    }
+    if (!d.time) {
+      await reply({ tenant, to: from, text: say('ask_time'), log });
+      return;
+    }
+    if (!d.name) {
+      await reply({ tenant, to: from, text: say('ask_name'), log });
+      return;
+    }
+  }
+
+  if (/^\d{1,2}(:\d{2})?$/.test(norm)) {
+    let t = norm;
+    if (/^\d{1,2}$/.test(t)) t = t.padStart(2, '0') + ':00';
+    setDraft(tenant.id, from, { time: t });
+    const d = getDraft(tenant.id, from);
+    if (!d.people) {
+      await reply({ tenant, to: from, text: say('ask_people'), log });
+      return;
+    }
+    if (!d.date) {
+      await reply({ tenant, to: from, text: say('ask_date'), log });
+      return;
+    }
+    if (!d.name) {
+      await reply({ tenant, to: from, text: say('ask_name'), log });
+      return;
+    }
+  }
+
   if (words.length <= 2 && !isShortWhitelisted(norm)) {
     if (pending) {
       await reply({ tenant, to: from, text: 'Vuoi confermare la prenotazione proposta? Scrivi "confermo" o "annulla".', log });
@@ -275,8 +353,14 @@ export async function processInboundText(args: {
     return;
   }
 
-  if (nlu.intent === 'greeting') {
-    await reply({ tenant, to: from, text: say('hello'), log });
+  if (nlu.intent === 'greeting' || nlu.intent === 'smalltalk.info' || nlu.intent === 'general.chat' || nlu.intent === 'unknown') {
+    const text = await generateReply({
+      history: [],
+      intent: nlu.intent,
+      fields: nlu.fields,
+      restaurantProfile: demoProfile,
+    });
+    await reply({ tenant, to: from, text, log });
     return;
   }
 
