@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import { z } from 'zod';
 import logger from '../../config/logger';
 import { demoProfile } from '../../config/tenantProfile.demo';
+import { parseRelativeDateToken, toIsoDate } from '../../utils/datetime';
 
 export type NluResult = {
   intent: 'booking.create' | 'smalltalk.info' | 'unknown';
@@ -169,6 +170,18 @@ export async function parseBookingIntent(
       if (!parsed.success) throw new Error('invalid json');
 
       const fields = parsed.data;
+      if (fields.date) {
+        const rel = parseRelativeDateToken(fields.date);
+        if (rel) fields.date = rel;
+        const today = toIsoDate(new Date(), _context?.timezone || 'Europe/Rome');
+        if (new Date(fields.date) < new Date(today)) {
+          const tomorrow = toIsoDate(
+            new Date(Date.now() + 24 * 60 * 60 * 1000),
+            _context?.timezone || 'Europe/Rome',
+          );
+          fields.date = tomorrow;
+        }
+      }
       const missing = ['people', 'date', 'time', 'name'].filter(
         (k) => (fields as Record<string, unknown>)[k] == null,
       );
@@ -212,16 +225,7 @@ export async function parseBookingIntent(
   const dateMatch = text.match(/(\d{1,2}[\/\-]\d{1,2}|oggi|domani)/i);
   if (dateMatch) {
     const d = dateMatch[1].toLowerCase();
-    if (d === 'oggi' || d === 'domani') {
-      const tz = _context?.timezone || 'Europe/Rome';
-      const days = d === 'oggi' ? 0 : 1;
-      const now = new Date();
-      now.setDate(now.getDate() + days);
-      const fmt = new Intl.DateTimeFormat('en-CA', { timeZone: tz });
-      fields.date = fmt.format(now);
-    } else {
-      fields.date = d;
-    }
+    fields.date = d;
   }
   const timeMatch = text.match(/alle\s*(\d{1,2})(?:[:.](\d{2}))?/i);
   if (timeMatch) {
@@ -231,6 +235,18 @@ export async function parseBookingIntent(
   }
   const nameMatch = text.match(/a nome\s+(\w+)/i);
   if (nameMatch) fields.name = nameMatch[1];
+
+  if (fields.date) {
+    const rel = parseRelativeDateToken(fields.date);
+    if (rel) fields.date = rel;
+    const today = toIsoDate(new Date(), _context?.timezone || 'Europe/Rome');
+    if (new Date(fields.date) < new Date(today)) {
+      fields.date = toIsoDate(
+        new Date(Date.now() + 24 * 60 * 60 * 1000),
+        _context?.timezone || 'Europe/Rome',
+      );
+    }
+  }
 
   if (Object.keys(fields).length) {
     const missing = ['people', 'date', 'time', 'name'].filter(

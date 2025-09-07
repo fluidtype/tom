@@ -1,15 +1,18 @@
 import { tenantRules } from './rules.index';
+import { prisma } from '../../db/client';
+import { addMinutes, toDateTime } from '../../utils/datetime';
 
 function toMinutes(t: string): number {
   const [h, m] = t.split(':').map(Number);
   return h * 60 + m;
 }
 
-export function checkAvailability(
+export async function checkAvailability(
   tenantSlug: string,
   date: string,
   time: string,
   people: number,
+  opts?: { tenantId?: string },
 ) {
   const rules = tenantRules[tenantSlug];
   if (!rules) return { ok: false, reason: 'rules_not_found' };
@@ -39,7 +42,26 @@ export function checkAvailability(
     return { ok: false, reason: 'capacity_exceeded' };
   }
 
-  // TODO: consider existing bookings from DB to adjust capacity
+  if (opts?.tenantId) {
+    const startAt = toDateTime(date, time);
+    const endAt = toDateTime(date, addMinutes(time, duration));
+    const bookings = await prisma.booking.findMany({
+      where: {
+        tenantId: opts.tenantId,
+        status: { in: ['pending', 'confirmed'] },
+        startAt: { lt: endAt },
+        endAt: { gt: startAt },
+      },
+      select: { people: true },
+    });
+    const already = bookings.reduce(
+      (sum: number, b: { people: number }) => sum + b.people,
+      0,
+    );
+    if (already + people > rules.capacity) {
+      return { ok: false, reason: 'capacity_exceeded' };
+    }
+  }
 
   return { ok: true, reason: 'available' };
 }

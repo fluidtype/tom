@@ -4,7 +4,7 @@ import { tenantRules } from '../services/booking/rules.index';
 
 const router = Router();
 
-router.get('/', (req, res) => {
+router.get('/', async (req, res) => {
   // prendi lo slug del tenant dalla request (se c'è)
   let tenant =
     req.tenant?.slug || req.header('X-Tenant')?.trim() || 'demo';
@@ -24,7 +24,7 @@ router.get('/', (req, res) => {
     return res.status(400).json({ ok: false, error: 'missing_params' });
   }
 
-  const result = checkAvailability(
+  const result = await checkAvailability(
     tenant,
     String(date),
     String(time),
