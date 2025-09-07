@@ -1,6 +1,7 @@
 import type { Logger } from 'pino';
 import { sendTextMessage } from '../whatsapp';
 import { parseBookingIntent } from '../openai/nlu';
+import { say } from '../nlg';
 import { checkAvailability, suggestAlternatives } from './availability';
 import { tenantRules } from './rules.index';
 import {
@@ -271,6 +272,11 @@ export async function processInboundText(args: {
   } catch (err) {
     log?.warn({ err }, 'nlu failure');
     await reply({ tenant, to: from, text: 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
+    return;
+  }
+
+  if (nlu.intent === 'greeting') {
+    await reply({ tenant, to: from, text: say('hello'), log });
     return;
   }
 

@@ -118,11 +118,25 @@ router.post('/', async (req: Request, res: Response) => {
           if (!Array.isArray(val?.messages)) continue;
 
           for (const m of val.messages) {
-            if (m.type !== 'text') continue;
+            let body: string | undefined;
+            const mAny = m as any;
+            if (m.type === 'text') {
+              body = mAny.text.body ?? '';
+            } else if (m.type === 'interactive') {
+              const itype = mAny.interactive?.type;
+              if (itype === 'button_reply') {
+                const id = mAny.interactive.button_reply?.id;
+                if (id === 'confirm') body = 'confermo';
+                else if (id === 'cancel') body = 'annulla';
+              } else if (itype === 'list_reply') {
+                const id = mAny.interactive.list_reply?.id;
+                if (id && id.startsWith('slot_')) body = id.replace('slot_', '');
+              }
+            }
+            if (!body) continue;
 
             const messageId = m.id;
             const from = m.from;
-            const body = m.text.body ?? '';
 
             try {
               await prisma.processedWebhook.create({

@@ -5,7 +5,14 @@ import { demoProfile } from '../../config/tenantProfile.demo';
 import { parseRelativeDateToken, toIsoDate } from '../../utils/datetime';
 
 export type NluResult = {
-  intent: 'booking.create' | 'booking.modify' | 'booking.cancel' | 'smalltalk.info' | 'unknown';
+  intent:
+    | 'booking.create'
+    | 'booking.modify'
+    | 'booking.cancel'
+    | 'availability.query'
+    | 'smalltalk.info'
+    | 'greeting'
+    | 'unknown';
   confidence: number;
   fields: {
     date?: string;
@@ -68,7 +75,7 @@ function detectSmalltalk(text: string): NluResult | null {
   }
   if (/(ciao|buongiorno|buonasera)/.test(t)) {
     return {
-      intent: 'smalltalk.info',
+      intent: 'greeting',
       confidence: 0.7,
       fields: {},
       missing_fields: [],
@@ -85,7 +92,13 @@ const strOpt = z
   .optional();
 
 const extractBookingSchema = z.object({
-  intent: z.enum(['booking.create', 'booking.modify', 'booking.cancel']),
+  intent: z.enum([
+    'booking.create',
+    'booking.modify',
+    'booking.cancel',
+    'availability.query',
+    'greeting',
+  ]),
   date: strOpt,
   time: strOpt,
   people: z.number().optional(),
@@ -106,7 +119,13 @@ const EXTRACT_BOOKING_TOOL = {
     properties: {
       intent: {
         type: 'string',
-        enum: ['booking.create', 'booking.modify', 'booking.cancel'],
+        enum: [
+          'booking.create',
+          'booking.modify',
+          'booking.cancel',
+          'availability.query',
+          'greeting',
+        ],
       },
       date: { type: 'string', description: 'Data ISO (YYYY-MM-DD)' },
       time: { type: 'string', description: 'Ora HH:mm nel fuso del ristorante' },

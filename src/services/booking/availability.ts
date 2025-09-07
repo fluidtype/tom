@@ -76,7 +76,7 @@ export async function suggestAlternatives(
   const rules = tenantRules[tenantSlug];
   if (!rules) return [] as string[];
   const candidates: string[] = [];
-  const minutes = [ -rules.slotMinutes, rules.slotMinutes, rules.slotMinutes * 2 ];
+  const minutes = [ -rules.slotMinutes, rules.slotMinutes, rules.slotMinutes * 2, -rules.slotMinutes * 2 ];
   for (const diff of minutes) {
     const t = addMinutes(time, diff);
     const avail = await checkAvailability(tenantSlug, date, t, people, opts);
@@ -84,4 +84,32 @@ export async function suggestAlternatives(
     if (candidates.length >= 3) break;
   }
   return candidates;
+}
+
+export async function listFreeSlots(
+  tenantSlug: string,
+  date: string,
+  people: number,
+  opts?: { tenantId?: string; limit?: number },
+): Promise<string[]> {
+  const rules = tenantRules[tenantSlug];
+  if (!rules) return [];
+  const dayNames = ['sun', 'mon', 'tue', 'wed', 'thu', 'fri', 'sat'];
+  const dayKey = dayNames[new Date(date).getDay()];
+  const ranges: string[] = rules.openingHours[dayKey] || [];
+  const slots: string[] = [];
+  const limit = opts?.limit ?? 5;
+
+  for (const r of ranges) {
+    const [start, end] = r.split('-').map(toMinutes);
+    for (let m = start; m + rules.tableDuration <= end; m += rules.slotMinutes) {
+      const hh = String(Math.floor(m / 60)).padStart(2, '0');
+      const mm = String(m % 60).padStart(2, '0');
+      const t = `${hh}:${mm}`;
+      const avail = await checkAvailability(tenantSlug, date, t, people, opts);
+      if (avail.ok) slots.push(t);
+      if (slots.length >= limit) return slots;
+    }
+  }
+  return slots;
 }

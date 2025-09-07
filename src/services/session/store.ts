@@ -21,6 +21,8 @@ export type SessionData = {
     notes?: string;
     expiresAt: number;
   };
+  draft?: { date?: string; time?: string; people?: number; name?: string; notes?: string };
+  proposal?: { date: string; time: string; people: number; name: string; expiresAt: number };
   lastOutboundAt?: number;
 };
 
@@ -111,6 +113,52 @@ export function setPendingModify(
   store.set(key(tenantId, phone), s);
 }
 
+export function setDraft(
+  tenantId: string,
+  phone: string,
+  patch: { date?: string; time?: string; people?: number; name?: string; notes?: string },
+): void {
+  const s = getSession(tenantId, phone);
+  s.draft = { ...(s.draft || {}), ...patch };
+  store.set(key(tenantId, phone), s);
+}
+
+export function getDraft(tenantId: string, phone: string): { date?: string; time?: string; people?: number; name?: string; notes?: string } {
+  const s = getSession(tenantId, phone);
+  return s.draft || {};
+}
+
+export function setProposal(
+  tenantId: string,
+  phone: string,
+  payload: { date: string; time: string; people: number; name: string },
+  ttlMs: number = DEFAULT_TTL_MS,
+): void {
+  const s = getSession(tenantId, phone);
+  s.proposal = { ...payload, expiresAt: Date.now() + ttlMs };
+  store.set(key(tenantId, phone), s);
+}
+
+export function getProposalIfValid(
+  tenantId: string,
+  phone: string,
+): { date: string; time: string; people: number; name: string } | undefined {
+  const s = getSession(tenantId, phone);
+  const p = s.proposal;
+  if (!p) return undefined;
+  if (p.expiresAt < Date.now()) {
+    delete s.proposal;
+    return undefined;
+  }
+  const { date, time, people, name } = p;
+  return { date, time, people, name };
+}
+
+export function clearProposal(tenantId: string, phone: string): void {
+  const s = getSession(tenantId, phone);
+  delete s.proposal;
+}
+
 export function getPendingModifyIfValid(
   tenantId: string,
   phone: string,
@@ -153,5 +201,10 @@ export default {
   setPendingModify,
   getPendingModifyIfValid,
   clearPendingModify,
+  setDraft,
+  getDraft,
+  setProposal,
+  getProposalIfValid,
+  clearProposal,
   setLastOutboundNow,
 };
