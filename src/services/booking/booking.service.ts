@@ -19,6 +19,38 @@ import {
   setLastOutboundNow,
 } from '../session/store';
 
+// Trova la prima prenotazione futura (o in corso) per questo numero
+async function findActiveBookingByPhone(tenantId: string, phone: string) {
+  return prisma.booking.findFirst({
+    where: {
+      tenantId,
+      customerPhone: phone,
+      status: { in: ['pending', 'confirmed'] },
+      startAt: { gte: new Date() },
+    },
+    orderBy: { startAt: 'asc' },
+  });
+}
+
+// Rileva sovrapposizione per lo stesso utente nello stesso slot
+async function hasOverlapForSameUser(
+  tenantId: string,
+  phone: string,
+  startAt: Date,
+  endAt: Date,
+) {
+  const count = await prisma.booking.count({
+    where: {
+      tenantId,
+      customerPhone: phone,
+      status: { in: ['pending', 'confirmed'] },
+      startAt: { lt: endAt },
+      endAt: { gt: startAt },
+    },
+  });
+  return count > 0;
+}
+
 function normalizeForIntent(s: string): string {
   return s
     .normalize('NFD')
@@ -106,9 +138,39 @@ export async function processInboundText(args: {
       return;
     }
     const { date, time, people, name, notes } = pending;
-    const rules = tenantRules[tenant.slug] || { tableDuration: 120 };
+    const rules = tenantRules[tenant.slug] || { tableDuration: 120, slotMinutes: 15 };
     const startAt = toDateTime(date, time);
     const endAt = toDateTime(date, addMinutes(time, rules.tableDuration));
+
+    const recheck = await checkAvailability(
+      tenant.slug || 'demo',
+      date,
+      time,
+      people,
+      { tenantId: tenant.id },
+    );
+    if (!recheck.ok) {
+      await reply({
+        tenant,
+        to: from,
+        text: 'La proposta non è più disponibile. Ripartiamo: dimmi data e ora.',
+        log,
+      });
+      clearSession(tenant.id, from);
+      return;
+    }
+
+    if (await hasOverlapForSameUser(tenant.id, from, startAt, endAt)) {
+      await reply({
+        tenant,
+        to: from,
+        text: 'Hai già una prenotazione a quell’ora. Vuoi modificarla o annullarla?',
+        log,
+      });
+      clearSession(tenant.id, from);
+      return;
+    }
+
     try {
       await prisma.booking.create({
         data: {
@@ -142,9 +204,25 @@ export async function processInboundText(args: {
     if (pending) {
       clearSession(tenant.id, from);
       await reply({ tenant, to: from, text: '❌ Ok, prenotazione annullata. Vuoi provare un altro orario?', log });
-    } else {
-      await reply({ tenant, to: from, text: 'Nessuna prenotazione da annullare. Vuoi crearne una nuova?', log });
+      return;
     }
+    const active = await findActiveBookingByPhone(tenant.id, from);
+    if (!active) {
+      await reply({
+        tenant,
+        to: from,
+        text: 'Non trovo prenotazioni attive da annullare. Vuoi crearne una nuova?',
+        log,
+      });
+      return;
+    }
+    await prisma.booking.update({ where: { id: active.id }, data: { status: 'cancelled' } });
+    await reply({
+      tenant,
+      to: from,
+      text: '❌ Ho annullato la tua prenotazione futura. Vuoi fissarne un’altra?',
+      log,
+    });
     return;
   }
 
@@ -189,6 +267,29 @@ export async function processInboundText(args: {
   const aligned = alignToSlot(time, rules.slotMinutes);
   if (!aligned.ok) {
     await reply({ tenant, to: from, text: 'Accettiamo prenotazioni ogni 15 minuti. Vuoi provare 20:00 o 20:15?', log });
+    return;
+  }
+
+  const startAtCandidate = toDateTime(normalizedDate, aligned.time);
+  const endAtCandidate = toDateTime(
+    normalizedDate,
+    addMinutes(aligned.time, rules.tableDuration),
+  );
+
+  if (
+    await hasOverlapForSameUser(
+      tenant.id,
+      from,
+      startAtCandidate,
+      endAtCandidate,
+    )
+  ) {
+    await reply({
+      tenant,
+      to: from,
+      text: 'Risulta già una tua prenotazione a quell’ora. Vuoi modificarla o annullarla?',
+      log,
+    });
     return;
   }
 
