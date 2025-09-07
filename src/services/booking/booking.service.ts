@@ -11,89 +11,47 @@ import {
   toDateTime,
 } from '../../utils/datetime';
 import { prisma } from '../../db/client';
+import {
+  getSession,
+  getPendingIfValid,
+  setPending,
+  clearSession,
+  setLastOutboundNow,
+} from '../session/store';
 
-export type SessionFields = {
-  date?: string;
-  time?: string;
-  people?: number;
-  name?: string;
-  phone?: string;
-  notes?: string;
-};
-
-type Session = {
-  fields: SessionFields;
-  last: number;
-  awaitingConfirm?: boolean;
-  lastSummary?: string;
-};
-
-const SESSIONS = new Map<string, Session>();
-const TTL_MS = 30 * 60 * 1000;
-
-const LAST_SEND = new Map<string, { text: string; at: number }>();
-const DEBOUNCE_MS = 2000;
-
-function shouldSkipSend(key: string, text: string): boolean {
-  const now = Date.now();
-  const prev = LAST_SEND.get(key);
-  if (prev && prev.text === text && now - prev.at < DEBOUNCE_MS) {
-    return true;
-  }
-  LAST_SEND.set(key, { text, at: now });
-  return false;
-}
-
-function getSession(key: string): Session {
-  const now = Date.now();
-  const s = SESSIONS.get(key);
-  if (!s || now - s.last > TTL_MS) {
-    const fresh: Session = { fields: {}, last: now };
-    SESSIONS.set(key, fresh);
-    return fresh;
-  }
-  s.last = now;
-  return s;
-}
-
-function saveSession(
-  key: string,
-  patch: SessionFields & { awaitingConfirm?: boolean; lastSummary?: string },
-): Session {
-  const cur = getSession(key);
-  const { awaitingConfirm, lastSummary, ...fieldPatch } = patch;
-  cur.fields = { ...cur.fields, ...fieldPatch };
-  if (awaitingConfirm !== undefined) cur.awaitingConfirm = awaitingConfirm;
-  if (lastSummary !== undefined) cur.lastSummary = lastSummary;
-  cur.last = Date.now();
-  SESSIONS.set(key, cur);
-  return cur;
-}
-
-function clearSession(key: string) {
-  SESSIONS.delete(key);
+function normalizeForIntent(s: string): string {
+  return s
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '') // remove accents
+    .replace(/[!?.,]/g, '')
+    .replace(/[\p{Emoji_Presentation}\p{Emoji}\p{Extended_Pictographic}]/gu, '')
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, ' ');
 }
 
 async function reply(args: {
-  tenant: { slug: string; whatsappPhoneId?: string | null; whatsappToken?: string | null };
+  tenant: { slug: string; whatsappPhoneId?: string | null; whatsappToken?: string | null; id: string };
   to: string;
   text: string;
   log?: Logger;
 }) {
+  const sess = getSession(args.tenant.id, args.to);
+  const now = Date.now();
+  if (sess.lastOutboundAt && now - sess.lastOutboundAt < 750) {
+    args.log?.info({ to: args.to }, 'reply skipped by dedupe');
+    return;
+  }
+
   const phoneNumberId =
     args.tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
   const token = args.tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
-
-  const debKey = `${args.tenant.slug}:${args.to}`;
-  if (shouldSkipSend(debKey, args.text)) {
-    args.log?.info({ debKey }, 'reply skipped by debounce');
-    return;
-  }
 
   if (!phoneNumberId || !token) {
     args.log?.warn({ tenant: args.tenant.slug }, 'missing WA credentials, skipping reply');
     return;
   }
+
   await sendTextMessage({
     to: args.to,
     body: args.text,
@@ -101,40 +59,58 @@ async function reply(args: {
     token,
     log: args.log,
   });
+  setLastOutboundNow(args.tenant.id, args.to);
+}
+
+function isTokenMatch(text: string, tokens: string[]): boolean {
+  const words = text.split(' ').filter(Boolean);
+  if (words.length <= 3) {
+    return tokens.includes(text);
+  }
+  return tokens.some((t) => text.startsWith(t + ' '));
+}
+
+function isShortWhitelisted(text: string): boolean {
+  if (/^\d+\s*(persone|persona)?$/.test(text)) return true;
+  if (/per\s*\d+$/.test(text)) return true;
+  if (/^alle?\s*\d{1,2}(:\d{2})?$/.test(text)) return true;
+  if (/^\d{1,2}(:\d{2})?$/.test(text)) return true;
+  return false;
 }
 
 export async function processInboundText(args: {
-  tenant: { id: string; slug: string; name: string; whatsappPhoneId?: string | null; whatsappToken?: string | null };
+  tenant: {
+    id: string;
+    slug: string;
+    name: string;
+    whatsappPhoneId?: string | null;
+    whatsappToken?: string | null;
+  };
   from: string;
   body: string;
   messageId: string;
   log?: Logger;
 }) {
   const { tenant, from, body, log } = args;
-  const key = from;
-  let s = getSession(key);
-  const msg = body.trim().toLowerCase();
+  const norm = normalizeForIntent(body);
+  const words = norm.split(' ').filter(Boolean);
 
-  if (['annulla', 'stop', 'no'].includes(msg)) {
-    clearSession(key);
-    await reply({ tenant, to: from, text: 'Ok, annullato. Se vuoi riprendiamo quando vuoi 😊', log });
-    return;
-  }
-  if (['confermo', 'ok', 'si', 'sì'].includes(msg)) {
-    if (!s.awaitingConfirm) {
-      await reply({ tenant, to: from, text: 'Mi mancano ancora alcuni dati. Quante persone e a che ora?', log });
+  const pending = getPendingIfValid(tenant.id, from);
+
+  const CONFIRM_TOKENS = ['confermo', 'conferma', 'ok', 'va bene', 'si', 'perfetto', 'procedi'];
+  const CANCEL_TOKENS = ['annulla', 'cancella', 'no', 'non va bene', 'stop', 'annullare', 'annullato'];
+
+  if (isTokenMatch(norm, CONFIRM_TOKENS)) {
+    if (!pending) {
+      await reply({ tenant, to: from, text: 'Non ho una prenotazione in attesa. Vuoi crearne una?', log });
       return;
     }
-    const { date, time, people, name } = s.fields;
-    if (!date || !time || !people || !name) {
-      await reply({ tenant, to: from, text: 'Mi mancano ancora alcuni dati. Quante persone e a che ora?', log });
-      return;
-    }
+    const { date, time, people, name, notes } = pending;
     const rules = tenantRules[tenant.slug] || { tableDuration: 120 };
     const startAt = toDateTime(date, time);
     const endAt = toDateTime(date, addMinutes(time, rules.tableDuration));
     try {
-      const booking = await prisma.booking.create({
+      await prisma.booking.create({
         data: {
           tenantId: tenant.id,
           customerName: name,
@@ -142,19 +118,42 @@ export async function processInboundText(args: {
           people,
           startAt,
           endAt,
-          notes: s.fields.notes || null,
+          notes: notes || null,
           source: 'whatsapp',
           waMessageId: args.messageId,
           status: 'confirmed',
         },
       });
-      log?.info({ bookingId: booking.id }, 'booking confirmed');
-      await reply({ tenant, to: from, text: `✅ Prenotazione confermata! Ti aspettiamo ${formatHuman(date, time)}.`, log });
+      await reply({
+        tenant,
+        to: from,
+        text: `✅ Prenotazione confermata! Ti aspettiamo il ${formatHuman(date, time)}.`,
+        log,
+      });
     } catch (err) {
       log?.error({ err }, 'failed to create booking');
-      await reply({ tenant, to: from, text: 'C’è stato un problema a salvare la prenotazione. Puoi riprovare tra poco?', log });
+      await reply({ tenant, to: from, text: 'Si è verificato un errore, riprova tra poco.', log });
     }
-    clearSession(key);
+    clearSession(tenant.id, from);
+    return;
+  }
+
+  if (isTokenMatch(norm, CANCEL_TOKENS)) {
+    if (pending) {
+      clearSession(tenant.id, from);
+      await reply({ tenant, to: from, text: '❌ Ok, prenotazione annullata. Vuoi provare un altro orario?', log });
+    } else {
+      await reply({ tenant, to: from, text: 'Nessuna prenotazione da annullare. Vuoi crearne una nuova?', log });
+    }
+    return;
+  }
+
+  if (words.length <= 2 && !isShortWhitelisted(norm)) {
+    if (pending) {
+      await reply({ tenant, to: from, text: 'Vuoi confermare la prenotazione proposta? Scrivi "confermo" o "annulla".', log });
+    } else {
+      await reply({ tenant, to: from, text: 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").', log });
+    }
     return;
   }
 
@@ -166,88 +165,52 @@ export async function processInboundText(args: {
     });
   } catch (err) {
     log?.warn({ err }, 'nlu failure');
-    await reply({ tenant, to: from, text: 'Scusami, non ho capito. Quante persone siete?', log });
-    return;
-  }
-
-  if (nlu.intent === 'smalltalk.info') {
-    const text = nlu.reply ?? 'Vuoi prenotare? Dimmi solo quante persone.';
-    await reply({ tenant, to: from, text, log });
+    await reply({ tenant, to: from, text: 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
     return;
   }
 
   if (nlu.intent !== 'booking.create') {
-    await reply({ tenant, to: from, text: 'Posso aiutarti con una prenotazione. Quante persone siete?', log });
+    const text = nlu.reply ?? 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").';
+    await reply({ tenant, to: from, text, log });
     return;
   }
 
-  s = saveSession(key, nlu.fields);
-
-  const required: Array<keyof SessionFields> = ['people', 'date', 'time', 'name'];
-  const missing = required.filter((k) => s.fields[k] == null);
-
-  if (missing.length) {
-    const prompts: Record<string, string> = {
-      people: 'Per quante persone?',
-      date: 'Che giorno?',
-      time: 'A che ora?',
-      name: 'A nome di chi?',
-    };
-    await reply({ tenant, to: from, text: prompts[missing[0]], log });
+  const { date, time, people, name, notes } = nlu.fields;
+  if (!date || !time || !people || !name) {
+    await reply({ tenant, to: from, text: 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").', log });
     return;
   }
-
-  let { date, time, people, name } = s.fields as Required<
-    Pick<SessionFields, 'date' | 'time' | 'people' | 'name'>
-  >;
 
   const rules = tenantRules[tenant.slug] || { slotMinutes: 15, tableDuration: 120 };
+
+  let normalizedDate = date;
   const rel = parseRelativeDateToken(date);
-  if (rel) {
-    date = rel;
-    s = saveSession(key, { date });
-  }
+  if (rel) normalizedDate = rel;
   const aligned = alignToSlot(time, rules.slotMinutes);
   if (!aligned.ok) {
-    s = saveSession(key, { time: aligned.time });
-    await reply({
-      tenant,
-      to: from,
-      text: 'Accettiamo prenotazioni ogni 15 minuti. Vuoi provare 20:00 o 20:15?',
-      log,
-    });
+    await reply({ tenant, to: from, text: 'Accettiamo prenotazioni ogni 15 minuti. Vuoi provare 20:00 o 20:15?', log });
     return;
   }
-  time = aligned.time;
-  s = saveSession(key, { time });
 
-  const avail = await checkAvailability(tenant.slug || 'demo', date, time, people, {
+  const avail = await checkAvailability(tenant.slug || 'demo', normalizedDate, aligned.time, people, {
     tenantId: tenant.id,
   });
 
   if (!avail.ok) {
-    let text = 'A quell\u2019orario non c\u2019\u00e8 disponibilit\u00e0. Vuoi provare un altro orario?';
+    let text = 'A quell’orario non c’è disponibilità. Vuoi provare un altro orario?';
     if (avail.reason === 'invalid_slot') {
       text = 'Accettiamo prenotazioni ogni 15 minuti. Vuoi provare 20:00 o 20:15?';
     } else if (avail.reason === 'outside_opening') {
-      text = 'Siamo chiusi a quell\u2019ora. Vuoi un altro orario?';
+      text = 'Siamo chiusi a quell’ora. Vuoi un altro orario?';
     } else if (avail.reason === 'capacity_exceeded') {
       text = 'Posti insufficienti per quel numero. Vuoi provare con meno persone o altro orario?';
-      log?.info({ date, time, people }, 'capacity exceeded');
+      log?.info({ normalizedDate, time: aligned.time, people }, 'capacity exceeded');
     }
     await reply({ tenant, to: from, text, log });
     return;
   }
 
-  const summary = `Perfetto! Tavolo per ${people} il ${formatHuman(date, time)} a nome ${name}. Confermi?`;
-  s = saveSession(key, {
-    awaitingConfirm: true,
-    lastSummary: summary,
-    date,
-    time,
-    people,
-    name,
-  });
-  log?.info({ summary }, 'awaiting confirm');
+  const summary = `Perfetto! Tavolo per ${people} il ${formatHuman(normalizedDate, aligned.time)} a nome ${name}. Confermi?`;
+  setPending(tenant.id, from, { date: normalizedDate, time: aligned.time, people, name, notes });
   await reply({ tenant, to: from, text: summary, log });
 }

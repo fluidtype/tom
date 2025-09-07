@@ -123,6 +123,17 @@ export async function parseBookingIntent(
   const small = detectSmalltalk(text);
   if (small) return small;
 
+  const wc = text.trim().split(/\s+/).filter(Boolean).length;
+  if (wc <= 2) {
+    return {
+      intent: 'unknown',
+      confidence: 0.4,
+      fields: {},
+      missing_fields: [],
+      next_action: 'none',
+    };
+  }
+
   let systemPrompt =
     'Sei un NLU per prenotazioni ristorante. Usa SOLO la function extract_booking per estrarre i campi. NESSUN testo libero.';
 
