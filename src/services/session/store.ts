@@ -10,6 +10,8 @@ export type PendingBooking = {
   expiresAt: number; // epoch ms
 };
 
+export type HistoryItem = { role: 'user' | 'assistant'; text: string; ts: number };
+
 export type SessionData = {
   pendingBooking?: PendingBooking;
   pendingCancel?: { bookingId: string; expiresAt: number };
@@ -24,6 +26,7 @@ export type SessionData = {
   draft?: { date?: string; time?: string; people?: number; name?: string; notes?: string };
   proposal?: { date: string; time: string; people: number; name: string; expiresAt: number };
   lastOutboundAt?: number;
+  history?: HistoryItem[];
 };
 
 export const DEFAULT_TTL_MS = Number(process.env.SESSION_PENDING_TTL_MS || 600_000);
@@ -190,6 +193,25 @@ export function setLastOutboundNow(tenantId: string, phone: string): void {
   store.set(key(tenantId, phone), s);
 }
 
+export function appendHistory(tenantId: string, phone: string, item: HistoryItem): void {
+  const s = getSession(tenantId, phone);
+  const h = s.history ?? [];
+  h.push(item);
+  s.history = h.slice(-12);
+  store.set(key(tenantId, phone), s);
+}
+
+export function getHistory(tenantId: string, phone: string): HistoryItem[] {
+  const s = getSession(tenantId, phone);
+  return s.history ?? [];
+}
+
+export function clearHistory(tenantId: string, phone: string): void {
+  const s = getSession(tenantId, phone);
+  delete s.history;
+  store.set(key(tenantId, phone), s);
+}
+
 export default {
   getSession,
   setPending,
@@ -207,4 +229,7 @@ export default {
   getProposalIfValid,
   clearProposal,
   setLastOutboundNow,
+  appendHistory,
+  getHistory,
+  clearHistory,
 };

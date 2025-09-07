@@ -41,7 +41,8 @@ Non usare tool esterni. Non fornire numeri/quote di mercato o meteo.`;
 
   const out = (res as unknown as { output?: Array<{ content?: Array<{ text?: string }> }> })
     .output?.[0]?.content?.[0]?.text;
-  return out || '';
+  return (out || '').trim() ||
+    'Certo! Posso aiutarti con prenotazioni, orari e disponibilità. Da dove partiamo?';
 }
 
 export default { generateReply };

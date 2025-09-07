@@ -29,6 +29,8 @@ import {
   clearPendingModify,
   setDraft,
   getDraft,
+  appendHistory,
+  getHistory,
 } from '../session/store';
 
 // Trova la prima prenotazione futura (o in corso) per questo numero
@@ -156,6 +158,7 @@ async function reply(args: {
     log: args.log,
   });
   setLastOutboundNow(args.tenant.id, args.to);
+  appendHistory(args.tenant.id, args.to, { role: 'assistant', text: args.text, ts: Date.now() });
 }
 
 function isShortWhitelisted(text: string): boolean {
@@ -164,6 +167,35 @@ function isShortWhitelisted(text: string): boolean {
   if (/^alle?\s*\d{1,2}(:\d{2})?$/.test(text)) return true;
   if (/^\d{1,2}(:\d{2})?$/.test(text)) return true;
   return false;
+}
+
+function toTwoDigits(n: number) {
+  return String(n).padStart(2, '0');
+}
+
+function guessShortTokenKind(
+  raw: string,
+  draft: { date?: string; time?: string; people?: number; name?: string },
+  capacity: number,
+): { kind: 'time' | 'people' | 'ambiguous'; value?: string | number } {
+  const token = raw.trim();
+  if (!/^\d{1,2}$/.test(token)) return { kind: 'ambiguous' };
+  const n = parseInt(token, 10);
+  const timeMissing = !draft.time;
+  const peopleMissing = draft.people == null;
+  if (n > capacity) return { kind: 'time', value: `${toTwoDigits(n)}:00` };
+  if (timeMissing && peopleMissing) {
+    if (n <= 23) return { kind: 'ambiguous' };
+    return { kind: 'people', value: n };
+  }
+  if (timeMissing && !peopleMissing && n <= 23) {
+    return { kind: 'time', value: `${toTwoDigits(n)}:00` };
+  }
+  if (peopleMissing && !timeMissing) {
+    if (n >= 1 && n <= capacity) return { kind: 'people', value: n };
+    return { kind: 'ambiguous' };
+  }
+  return { kind: 'ambiguous' };
 }
 
 export async function processInboundText(args: {
@@ -180,6 +212,7 @@ export async function processInboundText(args: {
   log?: Logger;
 }) {
   const { tenant, from, body, log } = args;
+  appendHistory(tenant.id, from, { role: 'user', text: body, ts: Date.now() });
   const norm = normalizeForIntent(body);
   const words = norm.split(' ').filter(Boolean);
 
@@ -307,16 +340,37 @@ export async function processInboundText(args: {
       await reply({ tenant, to: from, text: say('ask_time'), log });
       return;
     }
-    if (!d.name) {
-      await reply({ tenant, to: from, text: say('ask_name'), log });
-      return;
-    }
+  if (!d.name) {
+    await reply({ tenant, to: from, text: say('ask_name'), log });
+    return;
+  }
   }
 
-  if (/^\d{1,2}(:\d{2})?$/.test(norm)) {
-    let t = norm;
-    if (/^\d{1,2}$/.test(t)) t = t.padStart(2, '0') + ':00';
-    setDraft(tenant.id, from, { time: t });
+  // --- Gestione token corti numerici (es. "21") o orari incompleti ---
+  if (/^\d{1,2}(:\d{2})?$/.test(norm) || /^(per\s*)?\d{1,2}$/.test(norm)) {
+    const raw = norm.replace(/^per\s*/, '');
+    const draft = getDraft(tenant.id, from);
+    const rules = tenantRules[tenant.slug] || { tableDuration: 120, slotMinutes: 15, capacity: 8 };
+
+    if (/^\d{1,2}:\d{2}$/.test(raw)) {
+      setDraft(tenant.id, from, { time: raw });
+    } else {
+      const guess = guessShortTokenKind(raw, draft, rules.capacity);
+      if (guess.kind === 'time' && typeof guess.value === 'string') {
+        setDraft(tenant.id, from, { time: guess.value });
+      } else if (guess.kind === 'people' && typeof guess.value === 'number') {
+        setDraft(tenant.id, from, { people: guess.value });
+      } else {
+        await reply({
+          tenant,
+          to: from,
+          text: 'Intendi le ' + raw.padStart(2, '0') + ':00 oppure ' + raw + ' persone?',
+          log,
+        });
+        return;
+      }
+    }
+
     const d = getDraft(tenant.id, from);
     if (!d.people) {
       await reply({ tenant, to: from, text: say('ask_people'), log });
@@ -326,18 +380,25 @@ export async function processInboundText(args: {
       await reply({ tenant, to: from, text: say('ask_date'), log });
       return;
     }
+    if (!d.time) {
+      await reply({ tenant, to: from, text: say('ask_time'), log });
+      return;
+    }
     if (!d.name) {
       await reply({ tenant, to: from, text: say('ask_name'), log });
       return;
     }
   }
 
-  if (words.length <= 2 && !isShortWhitelisted(norm)) {
-    if (pending) {
-      await reply({ tenant, to: from, text: 'Vuoi confermare la prenotazione proposta? Scrivi "confermo" o "annulla".', log });
-    } else {
-      await reply({ tenant, to: from, text: 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").', log });
-    }
+  if (/^(ciao|ehi|hey|buongiorno|buonasera)\b/i.test(body.trim())) {
+    const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
+    const text = await generateReply({
+      history: hist,
+      intent: 'greeting',
+      fields: {},
+      restaurantProfile: demoProfile,
+    });
+    await reply({ tenant, to: from, text, log });
     return;
   }
 
@@ -353,9 +414,15 @@ export async function processInboundText(args: {
     return;
   }
 
-  if (nlu.intent === 'greeting' || nlu.intent === 'smalltalk.info' || nlu.intent === 'general.chat' || nlu.intent === 'unknown') {
+  if (
+    nlu.intent === 'greeting' ||
+    nlu.intent === 'smalltalk.info' ||
+    nlu.intent === 'general.chat' ||
+    nlu.intent === 'unknown'
+  ) {
+    const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
     const text = await generateReply({
-      history: [],
+      history: hist,
       intent: nlu.intent,
       fields: nlu.fields,
       restaurantProfile: demoProfile,
@@ -397,6 +464,15 @@ export async function processInboundText(args: {
     }
     setPendingModify(tenant.id, from, { bookingId: active.id, ...fields });
     await reply({ tenant, to: from, text: `Aggiorno la prenotazione a ${formatHuman(fields.date, fields.time)} per ${fields.people} persone. Confermi?`, log });
+    return;
+  }
+
+  if (words.length <= 2 && !isShortWhitelisted(norm)) {
+    if (pending) {
+      await reply({ tenant, to: from, text: 'Vuoi confermare la prenotazione proposta? Scrivi "confermo" o "annulla".', log });
+    } else {
+      await reply({ tenant, to: from, text: 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").', log });
+    }
     return;
   }
 
