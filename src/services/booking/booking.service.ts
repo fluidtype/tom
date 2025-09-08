@@ -439,13 +439,15 @@ export async function processInboundText(args: {
     }
   }
 
+  const history = getHistory(tenant.id, from);
+  const list_bookings = await getBookingsList(tenant.id, from);
   let nlu;
   try {
     nlu = await parseBookingIntent(body, {
       tenantId: tenant.id,
       from,
-      history: [],
-      list_bookings: [],
+      history,
+      list_bookings,
       locale: process.env.LOCALE || 'it-IT',
       timezone: process.env.TIMEZONE || 'Europe/Rome',
     });
@@ -453,6 +455,63 @@ export async function processInboundText(args: {
     log?.warn({ err }, 'nlu failure');
     await reply({ tenant, to: from, text: 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
     return;
+  }
+
+  switch (nlu.next_action) {
+    case 'list_show':
+      const listText = list_bookings.length
+        ? list_bookings
+            .map((b) => `${b.date} ${b.time} per ${b.people} (${b.name})`)
+            .join('\n')
+        : 'Nessuna prenotazione.';
+      const histForReply = history.map((h) => ({ role: h.role, text: h.text }));
+      const replyText = await generateReply({
+        history: histForReply,
+        intent: 'booking.list',
+        fields: {},
+        list_bookings,
+        user_id: from,
+        restaurantProfile: demoProfile,
+      });
+      await reply({
+        tenant,
+        to: from,
+        text: `${replyText}\n\n${listText}\nVuoi modificare o cancellare?`,
+        log,
+      });
+      if (list_bookings.length > 1) {
+        await sendBookingList({
+          to: from,
+          phoneNumberId: tenant.whatsappPhoneId ||
+            process.env.WHATSAPP_PHONE_NUMBER_ID!,
+          token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!,
+          title: 'Scegli',
+          bookings: list_bookings,
+          log,
+        });
+      }
+      return;
+    case 'ask_clarification':
+      setDraft(tenant.id, from, { ...getDraft(tenant.id, from), ...nlu.fields });
+      await reply({
+        tenant,
+        to: from,
+        text: nlu.reply || say(`ask_${nlu.missing_fields[0] || 'missing_generic'}`),
+        log,
+      });
+      return;
+    case 'send_info':
+      const histForInfo = history.map((h) => ({ role: h.role, text: h.text }));
+      const infoReply = await generateReply({
+        history: histForInfo,
+        intent: nlu.intent,
+        fields: nlu.fields,
+        list_bookings,
+        user_id: from,
+        restaurantProfile: demoProfile,
+      });
+      await reply({ tenant, to: from, text: infoReply, log });
+      return;
   }
 
   // Gestione step-by-step: se è booking.create ma mancano dei campi,
