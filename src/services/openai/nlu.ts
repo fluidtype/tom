@@ -11,7 +11,7 @@ export type NluResult = {
   fields: { date?: string; time?: string; people?: number; name?: string; phone?: string; notes?: string; booking_id?: string };
   missing_fields: string[];
   reply?: string;
-  next_action: 'check_availability' | 'ask_missing' | 'ask_clarification' | 'answer_smalltalk' | 'list_show' | 'send_info' | 'cancel_confirm' | 'modify_propose' | 'none';
+  next_action: 'check_availability' | 'ask_missing' | 'ask_clarification' | 'answer_smalltalk' | 'list_show' | 'send_info' | 'cancel_confirm' | 'modify_propose' | 'none' | 'unknown';
 };
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
