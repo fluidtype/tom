@@ -425,6 +425,10 @@ export async function processInboundText(args: {
   let nlu;
   try {
     nlu = await parseBookingIntent(body, {
+      tenantId: tenant.id,
+      from,
+      history: [],
+      list_bookings: [],
       locale: process.env.LOCALE || 'it-IT',
       timezone: process.env.TIMEZONE || 'Europe/Rome',
     });

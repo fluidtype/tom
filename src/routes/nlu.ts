@@ -10,7 +10,10 @@ router.get('/', async (req: Request, res: Response) => {
   }
   const phone = req.header('X-Phone') || undefined;
   const result = await parseBookingIntent(text, {
-    phone,
+    tenantId: 'demo',
+    from: phone || '',
+    history: [],
+    list_bookings: [],
     locale: process.env.LOCALE,
     timezone: process.env.TIMEZONE,
   });
