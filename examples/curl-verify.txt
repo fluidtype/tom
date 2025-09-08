@@ -1,0 +1,5 @@
+# Successful verification
+curl -i "http://localhost:3000/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=tom-verify-123&hub.challenge=hello"
+
+# Failed verification
+curl -i "http://localhost:3000/webhook/whatsapp?hub.mode=subscribe&hub.verify_token=wrong&hub.challenge=hello"
