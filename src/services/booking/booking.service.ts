@@ -376,55 +376,25 @@ export async function processInboundText(args: { tenant: { id: string; slug: str
     case 'check_availability':
       const { date, time, people, name, notes, booking_id } = nlu.fields;
       if (nlu.intent === 'booking.modify' && booking_id) {
-        const active = await prisma.booking.findUnique({
-          where: { id: booking_id, tenantId: tenant.id, customerPhone: from },
-        });
+        const active = await prisma.booking.findUnique({ where: { id: booking_id, tenantId: tenant.id, customerPhone: from } });
         if (!active) {
           await reply({ tenant, to: from, text: 'Non trovata.', log });
           return;
         }
-        const fields = {
-          date: date || toIsoDate(active.startAt),
-          time: time || active.startAt.toISOString().slice(11, 16),
-          people: people || active.people,
-          notes,
-        };
+        const fields = { date: date || toIsoDate(active.startAt), time: time || active.startAt.toISOString().slice(11,16), people: people || active.people, notes };
         if (!fields.date || !fields.time || !fields.people) {
           await reply({ tenant, to: from, text: 'Mancano data, ora o persone.', log });
           return;
         }
-        const avail = await checkAvailability(
-          tenant.slug,
-          fields.date,
-          fields.time,
-          fields.people,
-          { tenantId: tenant.id },
-        );
+        const avail = await checkAvailability(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });
         if (!avail.ok) {
-          const alts = await suggestAlternatives(
-            tenant.slug,
-            fields.date,
-            fields.time,
-            fields.people,
-            { tenantId: tenant.id },
-          );
-          await sendTimeOptions({
-            to: from,
-            phoneNumberId: tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID!,
-            token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!,
-            title: 'Alternativi',
-            options: alts,
-            log,
-          });
+          const alts = await suggestAlternatives(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });
+          await sendTimeOptions({ to: from, phoneNumberId: tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID!, token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!, title: 'Alternativi', options: alts, log });
           return;
         }
-        setPendingModify(tenant.id, from, { bookingId: booking_id, ...fields });
-        await reply({
-          tenant,
-          to: from,
-          text: `Aggiorno ${booking_id} a ${formatHuman(fields.date, fields.time)} per ${fields.people}. Confermi?`,
-          log,
-        });
+        const bookingId = booking_id;
+        setPendingModify(tenant.id, from, { bookingId, ...fields });
+        await reply({ tenant, to: from, text: `Aggiorno ${booking_id} a ${formatHuman(fields.date, fields.time)} per ${fields.people}. Confermi?`, log });
         return;
       }
       if (!date || !time || !people || !name) {
@@ -446,13 +416,7 @@ export async function processInboundText(args: { tenant: { id: string; slug: str
         await reply({ tenant, to: from, text: 'Hai già prenotazione lì. Modifica o annulla?', log });
         return;
       }
-      const avail = await checkAvailability(
-        tenant.slug,
-        normalizedDate,
-        aligned.time,
-        people,
-        { tenantId: tenant.id },
-      );
+      const avail = await checkAvailability(tenant.slug, normalizedDate, aligned.time, people, { tenantId: tenant.id });
       if (!avail.ok) {
         let text = 'Non disponibile. Altro orario?';
         if (avail.reason === 'invalid_slot') text = 'Ogni 15 min. Prova 20:00 o 20:15?';
@@ -461,7 +425,7 @@ export async function processInboundText(args: { tenant: { id: string; slug: str
         await reply({ tenant, to: from, text, log });
         return;
       }
-      const hist = history.map((h) => ({ role: h.role, text: h.text }));
+      const hist = history.map(h => ({ role: h.role, text: h.text }));
       const summary = await generateReply({
         history: hist,
         intent: 'booking.create',
@@ -470,13 +434,7 @@ export async function processInboundText(args: { tenant: { id: string; slug: str
         user_id: from,
         restaurantProfile: demoProfile,
       });
-      setPending(tenant.id, from, {
-        date: normalizedDate,
-        time: aligned.time,
-        people,
-        name,
-        notes,
-      });
+      setPending(tenant.id, from, { date: normalizedDate, time: aligned.time, people, name, notes });
       const phoneNumberId = tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
       const token = tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
       if (phoneNumberId && token) {
@@ -487,15 +445,8 @@ export async function processInboundText(args: { tenant: { id: string; slug: str
       return;
     case 'none':
     case 'unknown':
-      const histForFallback = history.map((h) => ({ role: h.role, text: h.text }));
-      const fallbackText = await generateReply({
-        history: histForFallback,
-        intent: nlu.intent || 'unknown',
-        fields: nlu.fields,
-        list_bookings,
-        user_id: from,
-        restaurantProfile: demoProfile,
-      });
+      const histForFallback = history.map(h => ({ role: h.role, text: h.text }));
+      const fallbackText = await generateReply({ history: histForFallback, intent: nlu.intent || 'unknown', fields: nlu.fields, list_bookings, user_id: from, restaurantProfile: demoProfile });
       await reply({ tenant, to: from, text: fallbackText, log });
       return;
   }
