@@ -1,3 +1,4 @@
+import { prisma } from '../../db/client';
 // In-memory session store. NOT suitable for multi-process or cluster setups.
 // Provides pending booking storage with TTL and outbound deduplication timestamps.
 
@@ -37,15 +38,25 @@ function key(tenantId: string, phone: string): string {
   return `${tenantId}:${phone}`;
 }
 
-export function getSession(tenantId: string, phone: string): SessionData {
-  const k = key(tenantId, phone);
-  const s = store.get(k);
+export async function getSession(tenantId: string, phone: string): Promise<SessionData> {
+  let s = store.get(key(tenantId, phone));
   if (!s) {
-    const fresh: SessionData = {};
-    store.set(k, fresh);
-    return fresh;
+    const dbSession = await prisma.session.findUnique({
+      where: { tenantId_phone: { tenantId, phone } },
+    });
+    s = dbSession?.data ? JSON.parse(dbSession.data) : { history: [] };
+    if (!s.history) s.history = dbSession?.history || [];
+    store.set(key(tenantId, phone), s);
   }
   return s;
+}
+
+async function saveSessionToDb(tenantId: string, phone: string, data: SessionData) {
+  await prisma.session.upsert({
+    where: { tenantId_phone: { tenantId, phone } },
+    update: { data: JSON.stringify({ draft: data.draft, pendingBooking: data.pendingBooking, pendingCancel: data.pendingCancel, pendingModify: data.pendingModify, proposal: data.proposal, lastOutboundAt: data.lastOutboundAt }), history: data.history || [] },
+    create: { tenantId, phone, history: data.history || [] },
+  });
 }
 
 export function setPending(
