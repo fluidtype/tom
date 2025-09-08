@@ -392,8 +392,7 @@ export async function processInboundText(args: { tenant: { id: string; slug: str
           await sendTimeOptions({ to: from, phoneNumberId: tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID!, token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!, title: 'Alternativi', options: alts, log });
           return;
         }
-        const bookingId = booking_id;
-        setPendingModify(tenant.id, from, { bookingId, ...fields });
+        setPendingModify(tenant.id, from, { bookingId: booking_id, ...fields });
         await reply({ tenant, to: from, text: `Aggiorno ${booking_id} a ${formatHuman(fields.date, fields.time)} per ${fields.people}. Confermi?`, log });
         return;
       }
