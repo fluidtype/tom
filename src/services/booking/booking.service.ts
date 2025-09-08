@@ -349,6 +349,31 @@ export async function processInboundText(args: {
   }
   }
 
+  // --- Gestione token di data relativa (oggi/domani) ---
+  if (/^(oggi|domani)$/i.test(norm)) {
+    const tz = process.env.TIMEZONE || 'Europe/Rome';
+    const todayIso = toIsoDate(new Date(), tz);
+    const date = norm === 'oggi' ? todayIso : toIsoDate(new Date(Date.now() + 86400000), tz);
+
+    const prev = getDraft(tenant.id, from);
+    setDraft(tenant.id, from, { ...prev, date });
+
+    const d = getDraft(tenant.id, from);
+    if (!d.people) {
+      await reply({ tenant, to: from, text: say('ask_people'), log });
+      return;
+    }
+    if (!d.time) {
+      await reply({ tenant, to: from, text: say('ask_time'), log });
+      return;
+    }
+    if (!d.name) {
+      await reply({ tenant, to: from, text: say('ask_name'), log });
+      return;
+    }
+    // Se arrivi qui, hai tutto: il flusso più sotto proseguirà normalmente
+  }
+
   // --- Gestione token corti numerici (es. "21") o orari incompleti ---
   if (/^\d{1,2}(:\d{2})?$/.test(norm) || /^(per\s*)?\d{1,2}$/.test(norm)) {
     const raw = norm.replace(/^per\s*/, '');
@@ -403,6 +428,34 @@ export async function processInboundText(args: {
     log?.warn({ err }, 'nlu failure');
     await reply({ tenant, to: from, text: 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
     return;
+  }
+
+  // Gestione step-by-step: se è booking.create ma mancano dei campi,
+  // salva quanto già capito nel draft e chiedi il prossimo campo mirato.
+  if (nlu.intent === 'booking.create' && nlu.missing_fields.length) {
+    const prev = getDraft(tenant.id, from);
+    setDraft(tenant.id, from, {
+      ...prev,
+      ...nlu.fields, // accumula parziali: people/date/time/name se presenti
+    });
+
+    const missing = nlu.missing_fields;
+    if (missing.includes('people')) {
+      await reply({ tenant, to: from, text: say('ask_people'), log });
+      return;
+    }
+    if (missing.includes('date')) {
+      await reply({ tenant, to: from, text: say('ask_date'), log });
+      return;
+    }
+    if (missing.includes('time')) {
+      await reply({ tenant, to: from, text: say('ask_time'), log });
+      return;
+    }
+    if (missing.includes('name')) {
+      await reply({ tenant, to: from, text: say('ask_name'), log });
+      return;
+    }
   }
 
   if (/^(ciao|buongiorno|buonasera)\b/i.test(body.trim())) {
@@ -550,11 +603,22 @@ export async function processInboundText(args: {
     fields: { date: normalizedDate, time: aligned.time, people, name },
     restaurantProfile: demoProfile,
   });
-  setPending(tenant.id, from, { date: normalizedDate, time: aligned.time, people, name, notes });
-  await reply({ tenant, to: from, text: summary, log });
+  setPending(tenant.id, from, {
+    date: normalizedDate,
+    time: aligned.time,
+    people,
+    name,
+    notes,
+  });
+
   const phoneNumberId = tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
   const token = tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
+
+  // Evita messaggi doppi: se posso, mando SOLO i bottoni (il testo è nel body dei bottoni).
   if (phoneNumberId && token) {
     await sendConfirmButtons({ to: from, phoneNumberId, token, text: summary, log });
+  } else {
+    // Fallback se non ho credenziali: invio solo testo
+    await reply({ tenant, to: from, text: summary, log });
   }
 }

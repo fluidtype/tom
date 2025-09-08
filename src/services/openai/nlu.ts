@@ -148,21 +148,19 @@ export async function parseBookingIntent(
 
   const lower = text.toLowerCase();
   if (
-    /(prenot|prenota|prenotare|voglio prenotare|vorrei prenotare|riservare|riservo|prenotazione)/.test(
+    /\b(prenot|prenota|prenotare|prenoto|riserv|riservo|riserva|mi segni|metti un tavolo|vorrei|voglio)\b/.test(
       lower,
     )
   ) {
     return {
       intent: 'booking.create',
-      confidence: 0.7,
+      confidence: 0.75,
       fields: {},
       missing_fields: ['people', 'date', 'time', 'name'],
       next_action: 'ask_missing',
     };
   }
-  if (
-    /(annull|cancella|cancellare|annullare|disdire|disdico)/.test(lower)
-  ) {
+  if (/(annull|cancella|cancellare|annullare|disdire|disdico)/.test(lower)) {
     return {
       intent: 'booking.cancel',
       confidence: 0.7,
@@ -172,7 +170,9 @@ export async function parseBookingIntent(
     };
   }
   if (
-    /(modific|spost|cambi|cambiare|modificare|spostare)/.test(lower)
+    /\b(modific|spost|cambi|cambiare|modificare|spostare|anticipo|posticipo|aggiung|tolg)\b/.test(
+      lower,
+    )
   ) {
     return {
       intent: 'booking.modify',
@@ -184,7 +184,16 @@ export async function parseBookingIntent(
   }
 
   const wc = text.trim().split(/\s+/).filter(Boolean).length;
-  if (wc <= 2) {
+
+  // Lascia passare i token corti ma utili (date relative, orari, persone)
+  const short = text.trim().toLowerCase();
+  const isUsefulShort =
+    /\b(oggi|domani)\b/.test(short) || // date relative
+    /^\d{1,2}([\/\-]\d{1,2})?$/.test(short) || // 12 o 12/10
+    /^(?:alle?\s*)?\d{1,2}(?:[:\.e]\d{2})?$/.test(short) || // 20 o 20:30
+    /^(?:per\s*)?\d+\s*(?:persone|persona)?$/.test(short); // per 4 / 4 persone
+
+  if (wc <= 2 && !isUsefulShort) {
     return {
       intent: 'unknown',
       confidence: 0.4,
@@ -326,8 +335,11 @@ export async function parseBookingIntent(
     const mm = (timeMatch[2] || '00').padStart(2, '0');
     fields.time = `${hh}:${mm}`;
   }
-  const nameMatch = text.match(/a nome\s+(\w+)/i);
-  if (nameMatch) fields.name = nameMatch[1];
+const nameMatch =
+  text.match(/\ba nome\s+([A-Za-zÀ-ÖØ-öø-ÿ']+)/i) ||
+  text.match(/\bmi chiamo\s+([A-Za-zÀ-ÖØ-öø-ÿ']+)/i) ||
+  text.match(/\bsono\s+([A-Za-zÀ-ÖØ-öø-ÿ']+)/i);
+if (nameMatch) fields.name = nameMatch[1];
 
   if (typeof fields.date === 'string' && fields.date.trim() !== '') {
     let dateStr = fields.date;
