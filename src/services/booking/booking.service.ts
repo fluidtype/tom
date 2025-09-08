@@ -211,35 +211,28 @@ export async function getBookingsList(tenantId: string, phone: string) {
   }));
 }
 
-export async function processInboundText(args: {
-  tenant: {
-    id: string;
-    slug: string;
-    name: string;
-    whatsappPhoneId?: string | null;
-    whatsappToken?: string | null;
-  };
-  from: string;
-  body: string;
-  messageId: string;
-  log?: Logger;
-}) {
+
+export async function processInboundText(args: { tenant: { id: string; slug: string; name: string; whatsappPhoneId?: string | null; whatsappToken?: string | null; }; from: string; body: string; messageId: string; log?: Logger; }) {
   const { tenant, from, body, log } = args;
   appendHistory(tenant.id, from, { role: 'user', text: body, ts: Date.now() });
   const norm = normalizeForIntent(body);
-  const words = norm.split(' ').filter(Boolean);
-
   const pending = getPendingIfValid(tenant.id, from);
   const pendingCancel = getPendingCancelIfValid(tenant.id, from);
   const pendingModify = getPendingModifyIfValid(tenant.id, from);
-
+  const history = getHistory(tenant.id, from);
+  const list_bookings = await getBookingsList(tenant.id, from);
+  let nlu;
+  try {
+    nlu = await parseBookingIntent(body, { tenantId: tenant.id, from, history, list_bookings, locale: process.env.LOCALE || 'it-IT', timezone: process.env.TIMEZONE || 'Europe/Rome' });
+  } catch (err) {
+    log?.warn({ err }, 'nlu failure');
+    await reply({ tenant, to: from, text: nlu?.reply || 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
+    return;
+  }
   if (isAffirmative(norm)) {
     if (pendingCancel) {
-      await prisma.booking.update({
-        where: { id: pendingCancel.bookingId },
-        data: { status: 'cancelled' },
-      });
-      await reply({ tenant, to: from, text: '❌ Prenotazione annullata. Vuoi crearne una nuova?', log });
+      await prisma.booking.update({ where: { id: pendingCancel.bookingId }, data: { status: 'cancelled' } });
+      await reply({ tenant, to: from, text: 'Cancellata. Vuoi nuova?', log });
       clearPendingCancel(tenant.id, from);
       return;
     }
@@ -248,46 +241,34 @@ export async function processInboundText(args: {
       const rules = tenantRules[tenant.slug] || { tableDuration: 120, slotMinutes: 15 };
       const startAt = toDateTime(date!, time!);
       const endAt = toDateTime(date!, addMinutes(time!, rules.tableDuration));
-      const recheck = await checkAvailability(tenant.slug, date!, time!, people!, {
-        tenantId: tenant.id,
-      });
+      const recheck = await checkAvailability(tenant.slug, date!, time!, people!, { tenantId: tenant.id });
       if (!recheck.ok) {
-        await reply({ tenant, to: from, text: 'Non è più disponibile. Riproviamo?', log });
+        await reply({ tenant, to: from, text: 'Non disponibile. Riproviamo?', log });
         clearPendingModify(tenant.id, from);
         return;
       }
-      await prisma.booking.update({
-        where: { id: bookingId },
-        data: {
-          startAt,
-          endAt,
-          people: people!,
-          notes: notes || null,
-        },
-      });
-      await reply({ tenant, to: from, text: `✅ Modifica confermata per ${formatHuman(date!, time!)}.`, log });
+      await prisma.booking.update({ where: { id: bookingId }, data: { startAt, endAt, people: people!, notes: notes || null } });
+      await reply({ tenant, to: from, text: `Modifica confermata per ${formatHuman(date!, time!)}.`, log });
       clearPendingModify(tenant.id, from);
       clearSession(tenant.id, from);
       return;
     }
     if (!pending) {
-      await reply({ tenant, to: from, text: 'Non ho una prenotazione in attesa. Vuoi crearne una?', log });
+      await reply({ tenant, to: from, text: 'Non ho prenotazione in attesa. Vuoi crearne una?', log });
       return;
     }
     const { date, time, people, name, notes } = pending;
     const rules = tenantRules[tenant.slug] || { tableDuration: 120, slotMinutes: 15 };
     const startAt = toDateTime(date, time);
     const endAt = toDateTime(date, addMinutes(time, rules.tableDuration));
-    const recheck = await checkAvailability(tenant.slug, date, time, people, {
-      tenantId: tenant.id,
-    });
+    const recheck = await checkAvailability(tenant.slug, date, time, people, { tenantId: tenant.id });
     if (!recheck.ok) {
-      await reply({ tenant, to: from, text: 'La proposta non è più disponibile. Ripartiamo: dimmi data e ora.', log });
+      await reply({ tenant, to: from, text: 'Proposta non disponibile. Ripartiamo.', log });
       clearSession(tenant.id, from);
       return;
     }
     if (await hasOverlapForSameUser(tenant.id, from, startAt, endAt)) {
-      await reply({ tenant, to: from, text: 'Hai già una prenotazione a quell’ora. Vuoi modificarla o annullarla?', log });
+      await reply({ tenant, to: from, text: 'Hai già prenotazione a quell’ora. Modifica o annulla?', log });
       clearSession(tenant.id, from);
       return;
     }
@@ -306,555 +287,12 @@ export async function processInboundText(args: {
           status: 'confirmed',
         },
       });
-      await reply({ tenant, to: from, text: `✅ Prenotazione confermata! Ti aspettiamo il ${formatHuman(date, time)}.`, log });
+      await reply({ tenant, to: from, text: `Confermata! Ti aspettiamo ${formatHuman(date, time)}.`, log });
     } catch (err) {
       log?.error({ err }, 'failed to create booking');
-      await reply({ tenant, to: from, text: 'Si è verificato un errore, riprova tra poco.', log });
+      await reply({ tenant, to: from, text: 'Errore, riprova.', log });
     }
     clearSession(tenant.id, from);
     return;
-  }
-
-  if (isNegative(norm)) {
-    if (pending) {
-      clearSession(tenant.id, from);
-      await reply({ tenant, to: from, text: 'Annullata. Prova altro orario?', log });
-      return;
-    }
-    if (pendingCancel) {
-      clearPendingCancel(tenant.id, from);
-      await reply({ tenant, to: from, text: 'Annullamento cancellato.', log });
-      return;
-    }
-    if (pendingModify) {
-      clearPendingModify(tenant.id, from);
-      await reply({ tenant, to: from, text: 'Modifica annullata.', log });
-      return;
-    }
-    const list_bookings = await getBookingsList(tenant.id, from);
-    if (list_bookings.length === 0) {
-      await reply({ tenant, to: from, text: 'Nessuna prenotazione da annullare.', log });
-      return;
-    }
-    if (list_bookings.length === 1) {
-      setPendingCancel(tenant.id, from, list_bookings[0].id);
-      await reply({ tenant, to: from, text: `Annulla ${formatHuman(list_bookings[0].date, list_bookings[0].time)}? Confermo.`, log });
-      return;
-    }
-    await sendBookingList({
-      to: from,
-      phoneNumberId: tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID!,
-      token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!,
-      title: 'Quale annullare?',
-      bookings: list_bookings,
-      log,
-    });
-    return;
-  }
-
-  if (/^(per\s*)?\d+$/.test(norm)) {
-    const num = parseInt(norm.replace(/per\s*/g, ''), 10);
-    setDraft(tenant.id, from, { people: num });
-    const d = getDraft(tenant.id, from);
-    if (!d.date) {
-      await reply({ tenant, to: from, text: say('ask_date'), log });
-      return;
-    }
-    if (!d.time) {
-      await reply({ tenant, to: from, text: say('ask_time'), log });
-      return;
-    }
-  if (!d.name) {
-    await reply({ tenant, to: from, text: say('ask_name'), log });
-    return;
-  }
-  }
-
-  // --- Gestione token di data relativa (oggi/domani) ---
-  if (/^(oggi|domani)$/i.test(norm)) {
-    const tz = process.env.TIMEZONE || 'Europe/Rome';
-    const todayIso = toIsoDate(new Date(), tz);
-    const date = norm === 'oggi' ? todayIso : toIsoDate(new Date(Date.now() + 86400000), tz);
-
-    const prev = getDraft(tenant.id, from);
-    setDraft(tenant.id, from, { ...prev, date });
-
-    const d = getDraft(tenant.id, from);
-    if (!d.people) {
-      await reply({ tenant, to: from, text: say('ask_people'), log });
-      return;
-    }
-    if (!d.time) {
-      await reply({ tenant, to: from, text: say('ask_time'), log });
-      return;
-    }
-    if (!d.name) {
-      await reply({ tenant, to: from, text: say('ask_name'), log });
-      return;
-    }
-    // Se arrivi qui, hai tutto: il flusso più sotto proseguirà normalmente
-  }
-
-  // --- Gestione token corti numerici (es. "21") o orari incompleti ---
-  if (/^\d{1,2}(:\d{2})?$/.test(norm) || /^(per\s*)?\d{1,2}$/.test(norm)) {
-    const raw = norm.replace(/^per\s*/, '');
-    const draft = getDraft(tenant.id, from);
-    const rules = tenantRules[tenant.slug] || { tableDuration: 120, slotMinutes: 15, capacity: 8 };
-
-    if (/^\d{1,2}:\d{2}$/.test(raw)) {
-      setDraft(tenant.id, from, { time: raw });
-    } else {
-      const guess = guessShortTokenKind(raw, draft, rules.capacity);
-      if (guess.kind === 'time' && typeof guess.value === 'string') {
-        setDraft(tenant.id, from, { time: guess.value });
-      } else if (guess.kind === 'people' && typeof guess.value === 'number') {
-        setDraft(tenant.id, from, { people: guess.value });
-      } else {
-        await reply({
-          tenant,
-          to: from,
-          text: 'Intendi le ' + raw.padStart(2, '0') + ':00 oppure ' + raw + ' persone?',
-          log,
-        });
-        return;
-      }
-    }
-
-    const d = getDraft(tenant.id, from);
-    if (!d.people) {
-      await reply({ tenant, to: from, text: say('ask_people'), log });
-      return;
-    }
-    if (!d.date) {
-      await reply({ tenant, to: from, text: say('ask_date'), log });
-      return;
-    }
-    if (!d.time) {
-      await reply({ tenant, to: from, text: say('ask_time'), log });
-      return;
-    }
-    if (!d.name) {
-      await reply({ tenant, to: from, text: say('ask_name'), log });
-      return;
-    }
-  }
-
-  const history = getHistory(tenant.id, from);
-  const list_bookings = await getBookingsList(tenant.id, from);
-  let nlu;
-  try {
-    nlu = await parseBookingIntent(body, {
-      tenantId: tenant.id,
-      from,
-      history,
-      list_bookings,
-      locale: process.env.LOCALE || 'it-IT',
-      timezone: process.env.TIMEZONE || 'Europe/Rome',
-    });
-  } catch (err) {
-    log?.warn({ err }, 'nlu failure');
-    await reply({ tenant, to: from, text: 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
-    return;
-  }
-
-  switch (nlu.next_action as string) {
-    case 'list_show':
-      const listText = list_bookings.length
-        ? list_bookings
-            .map((b) => `${b.date} ${b.time} per ${b.people} (${b.name})`)
-            .join('\n')
-        : 'Nessuna prenotazione.';
-      const histForReply = history.map((h) => ({ role: h.role, text: h.text }));
-      const replyText = await generateReply({
-        history: histForReply,
-        intent: 'booking.list',
-        fields: {},
-        list_bookings,
-        user_id: from,
-        restaurantProfile: demoProfile,
-      });
-      await reply({
-        tenant,
-        to: from,
-        text: `${replyText}\n\n${listText}\nVuoi modificare o cancellare?`,
-        log,
-      });
-      if (list_bookings.length > 1) {
-        await sendBookingList({
-          to: from,
-          phoneNumberId: tenant.whatsappPhoneId ||
-            process.env.WHATSAPP_PHONE_NUMBER_ID!,
-          token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!,
-          title: 'Scegli',
-          bookings: list_bookings,
-          log,
-        });
-      }
-      return;
-    case 'ask_clarification':
-      setDraft(tenant.id, from, { ...getDraft(tenant.id, from), ...nlu.fields });
-      await reply({
-        tenant,
-        to: from,
-        text: nlu.reply || say(`ask_${nlu.missing_fields[0] || 'missing_generic'}`),
-        log,
-      });
-      return;
-    case 'send_info':
-      const histForInfo = history.map((h) => ({ role: h.role, text: h.text }));
-      const infoReply = await generateReply({
-        history: histForInfo,
-        intent: nlu.intent,
-        fields: nlu.fields,
-        list_bookings,
-        user_id: from,
-        restaurantProfile: demoProfile,
-      });
-      await reply({ tenant, to: from, text: infoReply, log });
-      return;
-    case 'check_availability':
-      const { date, time, people, name, notes, booking_id } = nlu.fields;
-      if (nlu.intent === 'booking.modify' && booking_id) {
-        const active = await prisma.booking.findUnique({
-          where: { id: booking_id, tenantId: tenant.id, customerPhone: from },
-        });
-        if (!active) {
-          await reply({ tenant, to: from, text: 'Non trovata.', log });
-          return;
-        }
-        const fields = {
-          date: date || toIsoDate(active.startAt),
-          time: time || active.startAt.toISOString().slice(11, 16),
-          people: people || active.people,
-          notes,
-        };
-        if (!fields.date || !fields.time || !fields.people) {
-          await reply({ tenant, to: from, text: 'Mancano data, ora o persone.', log });
-          return;
-        }
-        const avail = await checkAvailability(
-          tenant.slug,
-          fields.date,
-          fields.time,
-          fields.people,
-          { tenantId: tenant.id },
-        );
-        if (!avail.ok) {
-          const alts = await suggestAlternatives(
-            tenant.slug,
-            fields.date,
-            fields.time,
-            fields.people,
-            { tenantId: tenant.id },
-          );
-          await sendTimeOptions({
-            to: from,
-            phoneNumberId:
-              tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID!,
-            token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!,
-            title: 'Alternativi',
-            options: alts,
-            log,
-          });
-          return;
-        }
-        setPendingModify(tenant.id, from, { bookingId: booking_id, ...fields });
-        await reply({
-          tenant,
-          to: from,
-          text: `Aggiorno ${booking_id} a ${formatHuman(fields.date, fields.time)} per ${fields.people}. Confermi?`,
-          log,
-        });
-        return;
-      }
-      if (!date || !time || !people || !name) {
-        await reply({
-          tenant,
-          to: from,
-          text: nlu.reply || 'Dimmi data, ora, persone e nome.',
-          log,
-        });
-        return;
-      }
-      const rules = tenantRules[tenant.slug] || { slotMinutes: 15, tableDuration: 120 };
-      let normalizedDate = date;
-      const rel = parseRelativeDateToken(date);
-      if (rel) normalizedDate = rel;
-      const aligned = alignToSlot(time, rules.slotMinutes);
-      if (!aligned.ok) {
-        await reply({ tenant, to: from, text: 'Orari ogni 15 min. Prova vicino?', log });
-        return;
-      }
-      const startAtCandidate = toDateTime(normalizedDate, aligned.time);
-      const endAtCandidate = toDateTime(
-        normalizedDate,
-        addMinutes(aligned.time, rules.tableDuration),
-      );
-      if (await hasOverlapForSameUser(tenant.id, from, startAtCandidate, endAtCandidate)) {
-        await reply({
-          tenant,
-          to: from,
-          text: 'Hai già prenotazione lì. Modifica o annulla?',
-          log,
-        });
-        return;
-      }
-      const avail = await checkAvailability(
-        tenant.slug,
-        normalizedDate,
-        aligned.time,
-        people,
-        { tenantId: tenant.id },
-      );
-      if (!avail.ok) {
-        let text = 'Non disponibile. Altro orario?';
-        if (avail.reason === 'invalid_slot') text = 'Ogni 15 min. Prova 20:00 o 20:15?';
-        if (avail.reason === 'outside_opening') text = 'Chiusi lì. Altro orario?';
-        if (avail.reason === 'capacity_exceeded')
-          text = 'Posti insufficienti. Meno persone o altro orario?';
-        await reply({ tenant, to: from, text, log });
-        return;
-      }
-      const hist = history.map((h) => ({ role: h.role, text: h.text }));
-      const summary = await generateReply({
-        history: hist,
-        intent: 'booking.create',
-        fields: { date: normalizedDate, time: aligned.time, people, name },
-        list_bookings,
-        user_id: from,
-        restaurantProfile: demoProfile,
-      });
-      setPending(tenant.id, from, {
-        date: normalizedDate,
-        time: aligned.time,
-        people,
-        name,
-        notes,
-      });
-      const phoneNumberId =
-        tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
-      const token = tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
-      if (phoneNumberId && token) {
-        await sendConfirmButtons({
-          to: from,
-          phoneNumberId,
-          token,
-          text: summary,
-          log,
-        });
-      } else {
-        await reply({ tenant, to: from, text: summary, log });
-      }
-      return;
-    case 'none':
-    case 'unknown':
-      const histForFallback = history.map((h) => ({ role: h.role, text: h.text }));
-      const fallbackText = await generateReply({
-        history: histForFallback,
-        intent: nlu.intent || 'unknown',
-        fields: nlu.fields,
-        list_bookings,
-        user_id: from,
-        restaurantProfile: demoProfile,
-      });
-      await reply({ tenant, to: from, text: fallbackText, log });
-      return;
-  }
-
-  // Gestione step-by-step: se è booking.create ma mancano dei campi,
-  // salva quanto già capito nel draft e chiedi il prossimo campo mirato.
-  if (nlu.intent === 'booking.create' && nlu.missing_fields.length) {
-    const prev = getDraft(tenant.id, from);
-    setDraft(tenant.id, from, {
-      ...prev,
-      ...nlu.fields, // accumula parziali: people/date/time/name se presenti
-    });
-
-    const missing = nlu.missing_fields;
-    if (missing.includes('people')) {
-      await reply({ tenant, to: from, text: say('ask_people'), log });
-      return;
-    }
-    if (missing.includes('date')) {
-      await reply({ tenant, to: from, text: say('ask_date'), log });
-      return;
-    }
-    if (missing.includes('time')) {
-      await reply({ tenant, to: from, text: say('ask_time'), log });
-      return;
-    }
-    if (missing.includes('name')) {
-      await reply({ tenant, to: from, text: say('ask_name'), log });
-      return;
-    }
-  }
-
-  if (/^(ciao|buongiorno|buonasera)\b/i.test(body.trim())) {
-    const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
-    const text = await generateReply({
-      history: hist,
-      intent: 'greeting',
-      fields: {},
-      restaurantProfile: demoProfile,
-    });
-    await reply({ tenant, to: from, text, log });
-    return;
-  }
-
-  if (
-    nlu.intent === 'greeting' ||
-    nlu.intent === 'general.chat' ||
-    nlu.intent === 'unknown' ||
-    nlu.intent === 'info.menu' ||
-    nlu.intent === 'info.address' ||
-    nlu.intent === 'info.opening' ||
-    nlu.intent === 'info.parking'
-  ) {
-    const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
-    const text = await generateReply({
-      history: hist,
-      intent: nlu.intent as any,
-      fields: nlu.fields,
-      restaurantProfile: demoProfile,
-    });
-    await reply({ tenant, to: from, text, log });
-    return;
-  }
-
-  if (nlu.intent === 'booking.cancel') {
-    const list = await getBookingsList(tenant.id, from);
-    const active = list[0];
-    if (!active) {
-      await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive a tuo nome. Vuoi crearne una?', log });
-      return;
-    }
-    setPendingCancel(tenant.id, from, active.id);
-    await reply({ tenant, to: from, text: `Confermi l’annullamento della prenotazione del ${formatHuman(active.date, active.time)}?`, log });
-    return;
-  }
-
-  if (nlu.intent === 'booking.modify') {
-    const list = await getBookingsList(tenant.id, from);
-    const active = list[0];
-    if (!active) {
-      await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive da modificare. Vuoi crearne una?', log });
-      return;
-    }
-    const fields = { ...nlu.fields };
-    if (!fields.people) {
-      await reply({ tenant, to: from, text: 'Per quante persone?', log });
-      return;
-    }
-    if (!fields.date) fields.date = active.date;
-    if (!fields.time) fields.time = active.time;
-    const avail = await checkAvailability(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });
-    if (!avail.ok) {
-      const alts = await suggestAlternatives(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });
-      const altText = alts.length ? `Non disponibile. Posso proporti ${formatAltSlots(alts)}?` : 'Non disponibile. Vuoi un altro orario?';
-      await reply({ tenant, to: from, text: altText, log });
-      return;
-    }
-    setPendingModify(tenant.id, from, { bookingId: active.id, ...fields });
-    await reply({ tenant, to: from, text: `Aggiorno la prenotazione a ${formatHuman(fields.date, fields.time)} per ${fields.people} persone. Confermi?`, log });
-    return;
-  }
-
-  if (words.length <= 2 && !isShortWhitelisted(norm)) {
-    if (pending) {
-      await reply({ tenant, to: from, text: 'Vuoi confermare la prenotazione proposta? Scrivi "confermo" o "annulla".', log });
-    } else {
-      await reply({ tenant, to: from, text: 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").', log });
-    }
-    return;
-  }
-
-  if (nlu.intent !== 'booking.create') {
-    const text = nlu.reply ?? 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").';
-    await reply({ tenant, to: from, text, log });
-    return;
-  }
-
-  const { date, time, people, name, notes } = nlu.fields;
-  if (!date || !time || !people || !name) {
-    await reply({ tenant, to: from, text: 'Dimmi data, ora e persone (es. "domani alle 20 per 4 a nome Luca").', log });
-    return;
-  }
-
-  const rules = tenantRules[tenant.slug] || { slotMinutes: 15, tableDuration: 120 };
-
-  let normalizedDate = date;
-  const rel = parseRelativeDateToken(date);
-  if (rel) normalizedDate = rel;
-  const aligned = alignToSlot(time, rules.slotMinutes);
-  if (!aligned.ok) {
-    await reply({ tenant, to: from, text: 'Accettiamo prenotazioni ogni 15 minuti. Vuoi provare 20:00 o 20:15?', log });
-    return;
-  }
-
-  const startAtCandidate = toDateTime(normalizedDate, aligned.time);
-  const endAtCandidate = toDateTime(
-    normalizedDate,
-    addMinutes(aligned.time, rules.tableDuration),
-  );
-
-  if (
-    await hasOverlapForSameUser(
-      tenant.id,
-      from,
-      startAtCandidate,
-      endAtCandidate,
-    )
-  ) {
-    await reply({
-      tenant,
-      to: from,
-      text: 'Risulta già una tua prenotazione a quell’ora. Vuoi modificarla o annullarla?',
-      log,
-    });
-    return;
-  }
-
-  const avail = await checkAvailability(tenant.slug || 'demo', normalizedDate, aligned.time, people, {
-    tenantId: tenant.id,
-  });
-
-  if (!avail.ok) {
-    let text = 'A quell’orario non c’è disponibilità. Vuoi provare un altro orario?';
-    if (avail.reason === 'invalid_slot') {
-      text = 'Accettiamo prenotazioni ogni 15 minuti. Vuoi provare 20:00 o 20:15?';
-    } else if (avail.reason === 'outside_opening') {
-      text = 'Siamo chiusi a quell’ora. Vuoi un altro orario?';
-    } else if (avail.reason === 'capacity_exceeded') {
-      text = 'Posti insufficienti per quel numero. Vuoi provare con meno persone o altro orario?';
-      log?.info({ normalizedDate, time: aligned.time, people }, 'capacity exceeded');
-    }
-    await reply({ tenant, to: from, text, log });
-    return;
-  }
-
-  const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
-  const summary = await generateReply({
-    history: hist,
-    intent: 'booking.create',
-    fields: { date: normalizedDate, time: aligned.time, people, name },
-    restaurantProfile: demoProfile,
-  });
-  setPending(tenant.id, from, {
-    date: normalizedDate,
-    time: aligned.time,
-    people,
-    name,
-    notes,
-  });
-
-  const phoneNumberId = tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
-  const token = tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
-
-  // Evita messaggi doppi: se posso, mando SOLO i bottoni (il testo è nel body dei bottoni).
-  if (phoneNumberId && token) {
-    await sendConfirmButtons({ to: from, phoneNumberId, token, text: summary, log });
-  } else {
-    // Fallback se non ho credenziali: invio solo testo
-    await reply({ tenant, to: from, text: summary, log });
   }
 }
