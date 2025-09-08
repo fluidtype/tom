@@ -23,7 +23,7 @@ Se il messaggio non riguarda il ristorante (es. Bitcoin, meteo, politica), rispo
 Non usare tool esterni. Non fornire numeri/quote di mercato o meteo.`;
 
   const userPayload = {
-    history: history.slice(-5),
+    history,
     intent,
     fields: fields || {},
     toolsResult: toolsResult || {},

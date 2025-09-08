@@ -34,8 +34,26 @@ const WaTextMessageSchema = z.object({
   text: z.object({ body: z.string() }),
 });
 
+const WaInteractiveMessageSchema = z.object({
+  id: z.string(),
+  from: z.string(),
+  timestamp: z.string().optional(),
+  type: z.literal('interactive'),
+  interactive: z.object({
+    type: z.string().optional(),
+    button_reply: z
+      .object({ id: z.string().optional(), title: z.string().optional() })
+      .optional(),
+    list_reply: z
+      .object({ id: z.string().optional(), title: z.string().optional() })
+      .optional(),
+  }),
+});
+
+const WaMessageSchema = z.union([WaTextMessageSchema, WaInteractiveMessageSchema]);
+
 const WaChangeValueSchema = z.object({
-  messages: z.array(WaTextMessageSchema).optional(),
+  messages: z.array(WaMessageSchema).optional(),
   statuses: z.array(z.any()).optional(),
   metadata: z
     .object({

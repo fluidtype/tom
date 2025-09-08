@@ -1,5 +1,6 @@
 import type { Logger } from 'pino';
 import { sendTextMessage } from '../whatsapp';
+import { sendConfirmButtons } from '../whatsapp.interactive';
 import { parseBookingIntent } from '../openai/nlu';
 import { generateReply } from '../openai/dialogue';
 import { say } from '../nlg';
@@ -91,6 +92,7 @@ function normalize(s: string) {
 }
 
 function isAffirmative(t: string) {
+  if (/(👍|👌|✌️|🙂)/u.test(t)) return true;
   t = normalize(t);
   const w = [
     'confermo',
@@ -115,6 +117,7 @@ function isAffirmative(t: string) {
 }
 
 function isNegative(t: string) {
+  if (/(👎|🙅|🚫)/u.test(t)) return true;
   t = normalize(t);
   const w = [
     'annulla',
@@ -390,18 +393,6 @@ export async function processInboundText(args: {
     }
   }
 
-  if (/^(ciao|ehi|hey|buongiorno|buonasera)\b/i.test(body.trim())) {
-    const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
-    const text = await generateReply({
-      history: hist,
-      intent: 'greeting',
-      fields: {},
-      restaurantProfile: demoProfile,
-    });
-    await reply({ tenant, to: from, text, log });
-    return;
-  }
-
   let nlu;
   try {
     nlu = await parseBookingIntent(body, {
@@ -411,6 +402,18 @@ export async function processInboundText(args: {
   } catch (err) {
     log?.warn({ err }, 'nlu failure');
     await reply({ tenant, to: from, text: 'Scusami, non ho capito. Dimmi data, ora e persone.', log });
+    return;
+  }
+
+  if (/^(ciao|ehi|hey|buongiorno|buonasera)[\s!.,…]*$/i.test(body.trim())) {
+    const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
+    const text = await generateReply({
+      history: hist,
+      intent: 'greeting',
+      fields: {},
+      restaurantProfile: demoProfile,
+    });
+    await reply({ tenant, to: from, text, log });
     return;
   }
 
@@ -540,7 +543,18 @@ export async function processInboundText(args: {
     return;
   }
 
-  const summary = `Perfetto! Tavolo per ${people} il ${formatHuman(normalizedDate, aligned.time)} a nome ${name}. Confermi?`;
+  const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
+  const summary = await generateReply({
+    history: hist,
+    intent: 'booking.create',
+    fields: { date: normalizedDate, time: aligned.time, people, name },
+    restaurantProfile: demoProfile,
+  });
   setPending(tenant.id, from, { date: normalizedDate, time: aligned.time, people, name, notes });
   await reply({ tenant, to: from, text: summary, log });
+  const phoneNumberId = tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID;
+  const token = tenant.whatsappToken || process.env.WHATSAPP_TOKEN;
+  if (phoneNumberId && token) {
+    await sendConfirmButtons({ to: from, phoneNumberId, token, text: summary, log });
+  }
 }

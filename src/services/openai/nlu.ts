@@ -147,6 +147,15 @@ export async function parseBookingIntent(
   if (small) return small;
 
   const lower = text.toLowerCase();
+  if (/(prenot|prenota|prenotare|voglio prenotare|vorrei prenotare)/.test(lower)) {
+    return {
+      intent: 'booking.create',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: ['people', 'date', 'time', 'name'],
+      next_action: 'ask_missing',
+    };
+  }
   if (/annull/.test(lower)) {
     return { intent: 'booking.cancel', confidence: 0.7, fields: {}, missing_fields: [], next_action: 'ask_missing' };
   }
