@@ -318,27 +318,37 @@ export async function processInboundText(args: {
   if (isNegative(norm)) {
     if (pending) {
       clearSession(tenant.id, from);
-      await reply({ tenant, to: from, text: '❌ Ok, prenotazione annullata. Vuoi provare un altro orario?', log });
+      await reply({ tenant, to: from, text: 'Annullata. Prova altro orario?', log });
       return;
     }
     if (pendingCancel) {
       clearPendingCancel(tenant.id, from);
-      await reply({ tenant, to: from, text: 'Ok, annullamento cancellato. Vuoi altro?', log });
+      await reply({ tenant, to: from, text: 'Annullamento cancellato.', log });
       return;
     }
     if (pendingModify) {
       clearPendingModify(tenant.id, from);
-      await reply({ tenant, to: from, text: 'Ok, modifica annullata.', log });
+      await reply({ tenant, to: from, text: 'Modifica annullata.', log });
       return;
     }
-    const list = await getBookingsList(tenant.id, from);
-    const active = list[0];
-    if (!active) {
-      await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive da annullare. Vuoi crearne una?', log });
+    const list_bookings = await getBookingsList(tenant.id, from);
+    if (list_bookings.length === 0) {
+      await reply({ tenant, to: from, text: 'Nessuna prenotazione da annullare.', log });
       return;
     }
-    setPendingCancel(tenant.id, from, active.id);
-    await reply({ tenant, to: from, text: `Vuoi annullare la prenotazione del ${formatHuman(active.date, active.time)}? Scrivi confermo per procedere.`, log });
+    if (list_bookings.length === 1) {
+      setPendingCancel(tenant.id, from, list_bookings[0].id);
+      await reply({ tenant, to: from, text: `Annulla ${formatHuman(list_bookings[0].date, list_bookings[0].time)}? Confermo.`, log });
+      return;
+    }
+    await sendBookingList({
+      to: from,
+      phoneNumberId: tenant.whatsappPhoneId || process.env.WHATSAPP_PHONE_NUMBER_ID!,
+      token: tenant.whatsappToken || process.env.WHATSAPP_TOKEN!,
+      title: 'Quale annullare?',
+      bookings: list_bookings,
+      log,
+    });
     return;
   }
 
