@@ -103,6 +103,7 @@ export function getPendingCancelIfValid(
 export function clearPendingCancel(tenantId: string, phone: string): void {
   const s = getSession(tenantId, phone);
   delete s.pendingCancel;
+  store.set(key(tenantId, phone), s);
 }
 
 export function setPendingModify(
@@ -160,6 +161,7 @@ export function getProposalIfValid(
 export function clearProposal(tenantId: string, phone: string): void {
   const s = getSession(tenantId, phone);
   delete s.proposal;
+  store.set(key(tenantId, phone), s);
 }
 
 export function getPendingModifyIfValid(
@@ -185,6 +187,7 @@ export function getPendingModifyIfValid(
 export function clearPendingModify(tenantId: string, phone: string): void {
   const s = getSession(tenantId, phone);
   delete s.pendingModify;
+  store.set(key(tenantId, phone), s);
 }
 
 export function setLastOutboundNow(tenantId: string, phone: string): void {

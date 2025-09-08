@@ -147,7 +147,11 @@ export async function parseBookingIntent(
   if (small) return small;
 
   const lower = text.toLowerCase();
-  if (/(prenot|prenota|prenotare|voglio prenotare|vorrei prenotare)/.test(lower)) {
+  if (
+    /(prenot|prenota|prenotare|voglio prenotare|vorrei prenotare|riservare|riservo|prenotazione)/.test(
+      lower,
+    )
+  ) {
     return {
       intent: 'booking.create',
       confidence: 0.7,
@@ -156,11 +160,27 @@ export async function parseBookingIntent(
       next_action: 'ask_missing',
     };
   }
-  if (/annull/.test(lower)) {
-    return { intent: 'booking.cancel', confidence: 0.7, fields: {}, missing_fields: [], next_action: 'ask_missing' };
+  if (
+    /(annull|cancella|cancellare|annullare|disdire|disdico)/.test(lower)
+  ) {
+    return {
+      intent: 'booking.cancel',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: [],
+      next_action: 'ask_missing',
+    };
   }
-  if (/(modific|spost|cambi)/.test(lower)) {
-    return { intent: 'booking.modify', confidence: 0.7, fields: {}, missing_fields: [], next_action: 'ask_missing' };
+  if (
+    /(modific|spost|cambi|cambiare|modificare|spostare)/.test(lower)
+  ) {
+    return {
+      intent: 'booking.modify',
+      confidence: 0.7,
+      fields: {},
+      missing_fields: [],
+      next_action: 'ask_missing',
+    };
   }
 
   const wc = text.trim().split(/\s+/).filter(Boolean).length;

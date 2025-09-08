@@ -10,7 +10,14 @@ type SendOpts = {
   log?: Logger;
 };
 
-export async function sendTimeOptions({ to, phoneNumberId, token, title = 'Scegli un orario', options, log }: SendOpts) {
+export async function sendTimeOptions({
+  to,
+  phoneNumberId,
+  token,
+  title = 'Scegli un orario',
+  options,
+  log,
+}: SendOpts) {
   const rows = options.map((o) => ({ id: `slot_${o}`, title: o }));
   const payload = {
     messaging_product: 'whatsapp',
@@ -25,7 +32,7 @@ export async function sendTimeOptions({ to, phoneNumberId, token, title = 'Scegl
       },
     },
   };
-  await sendRaw({ phoneNumberId, token, payload, log });
+  return sendRaw({ phoneNumberId, token, payload, log });
 }
 
 type ConfirmOpts = {
@@ -36,7 +43,13 @@ type ConfirmOpts = {
   log?: Logger;
 };
 
-export async function sendConfirmButtons({ to, phoneNumberId, token, text, log }: ConfirmOpts) {
+export async function sendConfirmButtons({
+  to,
+  phoneNumberId,
+  token,
+  text,
+  log,
+}: ConfirmOpts) {
   const payload = {
     messaging_product: 'whatsapp',
     to,
@@ -52,11 +65,11 @@ export async function sendConfirmButtons({ to, phoneNumberId, token, text, log }
       },
     },
   };
-  await sendRaw({ phoneNumberId, token, payload, log });
+  return sendRaw({ phoneNumberId, token, payload, log });
 }
 
 type RawArgs = { phoneNumberId: string; token: string; payload: unknown; log?: Logger };
-async function sendRaw({ phoneNumberId, token, payload, log }: RawArgs) {
+async function sendRaw({ phoneNumberId, token, payload, log }: RawArgs): Promise<boolean> {
   const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`;
   const res = await fetch(url, {
     method: 'POST',
@@ -68,7 +81,8 @@ async function sendRaw({ phoneNumberId, token, payload, log }: RawArgs) {
   });
   if (!res.ok) {
     log?.warn({ status: res.status }, 'wa interactive not ok');
-  } else {
-    log?.info({ status: res.status }, 'wa interactive ok');
+    return false;
   }
+  log?.info({ status: res.status }, 'wa interactive ok');
+  return true;
 }

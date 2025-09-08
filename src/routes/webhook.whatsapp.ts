@@ -204,6 +204,7 @@ router.post('/', async (req: Request, res: Response) => {
                   log: req.log,
                 });
               }
+              continue;
             }
 
             req.log?.info(

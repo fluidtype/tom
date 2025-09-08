@@ -405,7 +405,7 @@ export async function processInboundText(args: {
     return;
   }
 
-  if (/^(ciao|ehi|hey|buongiorno|buonasera)[\s!.,…]*$/i.test(body.trim())) {
+  if (/^(ciao|buongiorno|buonasera)\b/i.test(body.trim())) {
     const hist = getHistory(tenant.id, from).map((h) => ({ role: h.role, text: h.text }));
     const text = await generateReply({
       history: hist,
