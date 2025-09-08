@@ -1,6 +1,10 @@
 import type { Logger } from 'pino';
 import { sendTextMessage } from '../whatsapp';
-import { sendConfirmButtons } from '../whatsapp.interactive';
+import {
+  sendConfirmButtons,
+  sendTimeOptions,
+  sendBookingList,
+} from '../whatsapp.interactive';
 import { parseBookingIntent } from '../openai/nlu';
 import { generateReply } from '../openai/dialogue';
 import { say } from '../nlg';
@@ -34,22 +38,8 @@ import {
   getHistory,
 } from '../session/store';
 
-export async function getBookingsList(): Promise<unknown[]> {
-  return [];
-}
-
 // Trova la prima prenotazione futura (o in corso) per questo numero
-async function findActiveBookingByPhone(tenantId: string, phone: string) {
-  return prisma.booking.findFirst({
-    where: {
-      tenantId,
-      customerPhone: phone,
-      status: { in: ['pending', 'confirmed'] },
-      startAt: { gte: new Date() },
-    },
-    orderBy: { startAt: 'asc' },
-  });
-}
+// (legacy function removed)
 
 // Rileva sovrapposizione per lo stesso utente nello stesso slot
 async function hasOverlapForSameUser(
@@ -205,6 +195,22 @@ function guessShortTokenKind(
   return { kind: 'ambiguous' };
 }
 
+export async function getBookingsList(tenantId: string, phone: string) {
+  const bookings = await prisma.booking.findMany({
+    where: { tenantId, customerPhone: phone, status: 'confirmed', startAt: { gte: new Date() } },
+    orderBy: { startAt: 'asc' },
+    select: { id: true, startAt: true, people: true, customerName: true, status: true },
+  });
+  return bookings.map((b) => ({
+    id: b.id,
+    date: toIsoDate(b.startAt),
+    time: b.startAt.toISOString().slice(11, 16),
+    people: b.people,
+    name: b.customerName,
+    status: b.status,
+  }));
+}
+
 export async function processInboundText(args: {
   tenant: {
     id: string;
@@ -325,13 +331,14 @@ export async function processInboundText(args: {
       await reply({ tenant, to: from, text: 'Ok, modifica annullata.', log });
       return;
     }
-    const active = await findActiveBookingByPhone(tenant.id, from);
+    const list = await getBookingsList(tenant.id, from);
+    const active = list[0];
     if (!active) {
       await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive da annullare. Vuoi crearne una?', log });
       return;
     }
     setPendingCancel(tenant.id, from, active.id);
-    await reply({ tenant, to: from, text: `Vuoi annullare la prenotazione del ${formatHuman(toIsoDate(active.startAt), active.startAt.toISOString().slice(11,16))}? Scrivi confermo per procedere.`, log });
+    await reply({ tenant, to: from, text: `Vuoi annullare la prenotazione del ${formatHuman(active.date, active.time)}? Scrivi confermo per procedere.`, log });
     return;
   }
 
@@ -499,18 +506,20 @@ export async function processInboundText(args: {
   }
 
   if (nlu.intent === 'booking.cancel') {
-    const active = await findActiveBookingByPhone(tenant.id, from);
+    const list = await getBookingsList(tenant.id, from);
+    const active = list[0];
     if (!active) {
       await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive a tuo nome. Vuoi crearne una?', log });
       return;
     }
     setPendingCancel(tenant.id, from, active.id);
-    await reply({ tenant, to: from, text: `Confermi l’annullamento della prenotazione del ${formatHuman(toIsoDate(active.startAt), active.startAt.toISOString().slice(11,16))}?`, log });
+    await reply({ tenant, to: from, text: `Confermi l’annullamento della prenotazione del ${formatHuman(active.date, active.time)}?`, log });
     return;
   }
 
   if (nlu.intent === 'booking.modify') {
-    const active = await findActiveBookingByPhone(tenant.id, from);
+    const list = await getBookingsList(tenant.id, from);
+    const active = list[0];
     if (!active) {
       await reply({ tenant, to: from, text: 'Non vedo prenotazioni attive da modificare. Vuoi crearne una?', log });
       return;
@@ -520,8 +529,8 @@ export async function processInboundText(args: {
       await reply({ tenant, to: from, text: 'Per quante persone?', log });
       return;
     }
-    if (!fields.date) fields.date = toIsoDate(active.startAt);
-    if (!fields.time) fields.time = active.startAt.toISOString().slice(11,16);
+    if (!fields.date) fields.date = active.date;
+    if (!fields.time) fields.time = active.time;
     const avail = await checkAvailability(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });
     if (!avail.ok) {
       const alts = await suggestAlternatives(tenant.slug, fields.date, fields.time, fields.people, { tenantId: tenant.id });

@@ -68,6 +68,43 @@ export async function sendConfirmButtons({
   return sendRaw({ phoneNumberId, token, payload, log });
 }
 
+type SendBookingListOpts = {
+  to: string;
+  phoneNumberId: string;
+  token: string;
+  title?: string;
+  bookings: Array<{ id: string; date: string; time: string; people: number; name: string }>;
+  log?: Logger;
+};
+
+export async function sendBookingList({
+  to,
+  phoneNumberId,
+  token,
+  title = 'Scegli prenotazione',
+  bookings,
+  log,
+}: SendBookingListOpts) {
+  const rows = bookings.map((b) => ({
+    id: `booking_${b.id}`,
+    title: `${b.date} ${b.time} (${b.people} persone)`,
+  }));
+  const payload = {
+    messaging_product: 'whatsapp',
+    to,
+    type: 'interactive',
+    interactive: {
+      type: 'list',
+      body: { text: title },
+      action: {
+        button: 'Prenotazioni',
+        sections: [{ title: 'Le tue prenotazioni', rows }],
+      },
+    },
+  };
+  return sendRaw({ phoneNumberId, token, payload, log });
+}
+
 type RawArgs = { phoneNumberId: string; token: string; payload: unknown; log?: Logger };
 async function sendRaw({ phoneNumberId, token, payload, log }: RawArgs): Promise<boolean> {
   const url = `https://graph.facebook.com/v20.0/${phoneNumberId}/messages`;
